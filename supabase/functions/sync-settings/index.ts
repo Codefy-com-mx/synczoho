@@ -1,12 +1,5 @@
 // GET/PUT settings de sincronización por tienda
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-};
+import { corsHeaders, getAdminClient } from "../_shared/zoho.ts";
 
 const DEFAULT_FIELDS = {
   name: true,
@@ -61,17 +54,14 @@ Deno.serve(async (req) => {
       });
     }
 
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
+    const admin = getAdminClient();
 
     if (action === "save" && settings) {
       // Sólo persistimos campos conocidos
       const allowed = Object.keys(DEFAULTS);
       const clean: Record<string, unknown> = { store_id: storeId };
       for (const k of allowed) {
-        if (k in settings) clean[k] = (settings as any)[k];
+        if (k in settings) clean[k] = settings[k];
       }
       const { data: existing } = await admin
         .from("sync_settings")

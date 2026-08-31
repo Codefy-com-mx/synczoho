@@ -394,6 +394,8 @@ export type Database = {
       }
       sync_settings: {
         Row: {
+          alert_email: string | null
+          alert_on_error: boolean
           created_at: string
           customers_auto_sync_on_order: boolean
           id: string
@@ -406,14 +408,19 @@ export type Database = {
           products_overwrite_existing: boolean
           products_publish_on_import: boolean
           products_sync_fields: Json
+          prices_enabled: boolean
+          prices_schedule: string
           stock_direction: string
           stock_enabled: boolean
           stock_priority: string
+          stock_schedule: string
           stock_warehouse_id: string | null
           store_id: string
           updated_at: string
         }
         Insert: {
+          alert_email?: string | null
+          alert_on_error?: boolean
           created_at?: string
           customers_auto_sync_on_order?: boolean
           id?: string
@@ -426,14 +433,19 @@ export type Database = {
           products_overwrite_existing?: boolean
           products_publish_on_import?: boolean
           products_sync_fields?: Json
+          prices_enabled?: boolean
+          prices_schedule?: string
           stock_direction?: string
           stock_enabled?: boolean
           stock_priority?: string
+          stock_schedule?: string
           stock_warehouse_id?: string | null
           store_id: string
           updated_at?: string
         }
         Update: {
+          alert_email?: string | null
+          alert_on_error?: boolean
           created_at?: string
           customers_auto_sync_on_order?: boolean
           id?: string
@@ -446,9 +458,12 @@ export type Database = {
           products_overwrite_existing?: boolean
           products_publish_on_import?: boolean
           products_sync_fields?: Json
+          prices_enabled?: boolean
+          prices_schedule?: string
           stock_direction?: string
           stock_enabled?: boolean
           stock_priority?: string
+          stock_schedule?: string
           stock_warehouse_id?: string | null
           store_id?: string
           updated_at?: string

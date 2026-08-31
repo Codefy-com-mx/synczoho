@@ -322,7 +322,9 @@ Deno.serve(async (req) => {
           tiendanube_product_id: null,
         });
       }
-    } catch {}
+    } catch (logError) {
+      console.error("No se pudo registrar el error de la orden", logError);
+    }
     return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

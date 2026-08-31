@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import type { Database } from '@/integrations/supabase/types';
 
 export interface ProductSyncFields {
   name: boolean;
@@ -16,23 +17,24 @@ export interface ProductSyncFields {
   tax: boolean;
 }
 
-export interface SyncSettings {
-  store_id: string;
-  orders_enabled: boolean;
-  orders_create_as_draft: boolean;
-  orders_auto_confirm: boolean;
-  orders_generate_invoice_on_paid: boolean;
-  orders_only_paid: boolean;
-  stock_enabled: boolean;
-  stock_direction: 'zoho_to_tn' | 'tn_to_zoho' | 'bidirectional';
-  stock_priority: 'zoho' | 'tiendanube';
-  stock_warehouse_id: string | null;
-  customers_auto_sync_on_order: boolean;
-  products_publish_on_import: boolean;
-  products_overwrite_existing: boolean;
+type SyncSettingsRow = Database['public']['Tables']['sync_settings']['Row'];
+
+export type SyncSettings = Omit<
+  SyncSettingsRow,
+  | 'products_match_strategy'
+  | 'products_sync_fields'
+  | 'stock_direction'
+  | 'stock_priority'
+  | 'stock_schedule'
+  | 'prices_schedule'
+> & {
   products_match_strategy: 'sku' | 'name';
   products_sync_fields: ProductSyncFields;
-}
+  stock_direction: 'zoho_to_tn' | 'tn_to_zoho' | 'bidirectional';
+  stock_priority: 'zoho' | 'tiendanube';
+  stock_schedule: 'disabled' | 'hourly' | 'every6h' | 'daily';
+  prices_schedule: 'disabled' | 'hourly' | 'every6h' | 'daily';
+};
 
 export function useSyncSettings(storeId: string | null) {
   const [settings, setSettings] = useState<SyncSettings | null>(null);

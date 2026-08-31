@@ -505,7 +505,7 @@ async function fetchProductImages(
       if (!r.ok) continue;
       const buf = new Uint8Array(await r.arrayBuffer());
       if (buf.byteLength === 0) continue;
-      const filename = (c.name || `zoho-${c.id}.jpg`).replace(/[^\w.\-]/g, "_");
+      const filename = (c.name || `zoho-${c.id}.jpg`).replace(/[^\w.-]/g, "_");
       out.push({ attachment: encodeBase64(buf), filename, position: i + 1 });
       // Para item suelto con 1 sola variante, una sola imagen alcanza
       if (!p.is_group) break;

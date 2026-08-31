@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Box, Card, Title, Text, Spinner, Alert, Tag, Table, Checkbox,
 } from '@nimbus-ds/components';
@@ -42,14 +42,14 @@ export function SyncCustomersView({ storeId }: Props) {
     created: number; linked: number; skipped: number; errors: number; total: number; totalCount: number;
   } | null>(null);
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     const { data } = await supabase.functions.invoke('customers-history', {
       body: { store_id: storeId, limit: 50 },
     });
     setHistory((data?.customers as CustomerRow[]) || []);
-  };
+  }, [storeId]);
 
-  useEffect(() => { loadHistory(); /* eslint-disable-next-line */ }, [storeId]);
+  useEffect(() => { loadHistory(); }, [loadHistory]);
 
   const runBulk = async () => {
     setRunning(true);

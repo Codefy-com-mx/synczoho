@@ -113,7 +113,7 @@ export function SyncProductsView({ storeId }: SyncProductsViewProps) {
   // Sync default publish con la configuración guardada
   useEffect(() => {
     if (settings) setPublishOnImport(settings.products_publish_on_import);
-  }, [settings?.products_publish_on_import]);
+  }, [settings]);
 
   const load = async (overridePage?: number) => {
     setLoading(true);
