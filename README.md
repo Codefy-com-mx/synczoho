@@ -1,73 +1,44 @@
-# Welcome to your Lovable project
+# ZohoSync
 
-## Project info
+Frontend React/Vite y Edge Functions de Supabase para sincronizar Tiendanube con Zoho Inventory.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Desarrollo local
 
-## How can I edit this code?
-
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+Requiere Node.js 22 y npm.
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+cp .env.example .env
+npm ci
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Variables públicas:
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+```env
+VITE_SUPABASE_URL=https://supabase.example.com
+VITE_SUPABASE_PUBLISHABLE_KEY=...
+VITE_TIENDANUBE_APP_ID=40863
+```
 
-**Use GitHub Codespaces**
+El callback de la aplicación Tiendanube debe ser `https://<dominio>/auth/callback`.
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Supabase
 
-## What technologies are used for this project?
+Las migraciones y funciones están en `supabase/` y funcionan tanto con Supabase administrado como self-hosted.
 
-This project is built with:
+```sh
+supabase db push --db-url "$DATABASE_URL"
+supabase functions deploy
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+Configura también los secrets requeridos por las funciones (`TIENDANUBE_CLIENT_ID`, `TIENDANUBE_CLIENT_SECRET`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET` y, para alertas, `RESEND_API_KEY`).
 
-## How can I deploy this project?
+## Verificación
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+```sh
+npm run check
+```
 
-## Can I connect a custom domain to my Lovable project?
+## Coolify
 
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Despliega este repositorio como aplicación Nixpacks con Node 22. Define las tres variables `VITE_*` del ejemplo, usa `npm run build` y publica `dist/` mediante el servidor estático de Coolify. Aplica las migraciones y despliega las Edge Functions antes de publicar una versión que dependa de cambios de esquema.
