@@ -9,7 +9,7 @@ import { SyncOrdersView } from '@/components/SyncOrdersView';
 import { SyncStockView } from '@/components/SyncStockView';
 import { SyncCustomersView } from '@/components/SyncCustomersView';
 import { SyncLogsView } from '@/components/SyncLogsView';
-import { useNexo } from '@/components/NexoProvider';
+import { useNexo } from '@/hooks/useNexo';
 import { Loader2, RefreshCw, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { TIENDANUBE_APP_ID, getEmbeddedAdminAppUrl } from '@/lib/tiendanube';
@@ -26,7 +26,7 @@ import {
 export default function Index() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { isEmbedded, isConnected, storeInfo } = useNexo();
+  const { isEmbedded, isConnected, storeInfo, checked: nexoChecked } = useNexo();
   const [storeId, setStoreId] = useState<string | null>(null);
   const [storeName, setStoreName] = useState<string>('Mi Tienda');
   const [loading, setLoading] = useState(true);
@@ -187,7 +187,7 @@ export default function Index() {
     setStoreName('Mi Tienda');
   };
 
-  if (loading) {
+  if (!nexoChecked || loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-6 h-6 text-primary animate-spin" />
