@@ -28,6 +28,9 @@ export default function ZohoCallback() {
   const [selectedOrg, setSelectedOrg] = useState('');
   const [state, setState] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const code = searchParams.get('code');
+  const stateParam = searchParams.get('state');
+  const oauthError = searchParams.get('error');
 
   const redirectUri = `${window.location.origin}/zoho/callback`;
   const storeHandle = typeof window !== 'undefined'
@@ -35,10 +38,6 @@ export default function ZohoCallback() {
     : null;
 
   useEffect(() => {
-    const code = searchParams.get('code');
-    const stateParam = searchParams.get('state');
-    const oauthError = searchParams.get('error');
-
     if (oauthError) {
       setErrorMsg(oauthError);
       setStep('error');
@@ -76,7 +75,7 @@ export default function ZohoCallback() {
         setStep('error');
       }
     })();
-  }, [searchParams, redirectUri]);
+  }, [code, stateParam, oauthError, redirectUri]);
 
   const handleConfirmOrg = async () => {
     if (!selectedOrg) return;

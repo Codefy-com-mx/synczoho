@@ -9,9 +9,15 @@ export default function AuthCallback() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [message, setMessage] = useState('Procesando autorización...');
+  const code = searchParams.get('code');
+  const oauthError = searchParams.get('error');
 
   useEffect(() => {
-    const code = searchParams.get('code');
+    if (oauthError) {
+      setStatus('error');
+      setMessage(oauthError);
+      return;
+    }
 
     if (!code) {
       setStatus('error');
@@ -56,7 +62,7 @@ export default function AuthCallback() {
     }
 
     exchangeCode();
-  }, [searchParams, navigate]);
+  }, [code, oauthError, navigate]);
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">

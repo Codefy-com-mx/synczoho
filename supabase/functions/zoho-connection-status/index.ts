@@ -1,14 +1,8 @@
 // Edge function: devuelve el estado de la conexión Zoho de una tienda.
 // También verifica que el token de Tiendanube siga siendo válido:
 // si fue revocado (app desinstalada), limpia la DB y devuelve store_found: false.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TN_API, TN_USER_AGENT } from "../_shared/tiendanube.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+import { corsHeaders, getAdminClient } from "../_shared/zoho.ts";
 
 function gone(reason: string) {
   return new Response(
@@ -23,9 +17,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const admin = createClient(supabaseUrl, serviceKey);
+    const admin = getAdminClient();
 
     const body = await req.json().catch(() => ({}));
     const storeId: string | undefined = body.store_id;

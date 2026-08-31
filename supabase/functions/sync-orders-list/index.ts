@@ -1,6 +1,5 @@
 // Lista órdenes de Tiendanube enriquecidas con estado de sync a Zoho.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { corsHeaders } from "../_shared/zoho.ts";
+import { corsHeaders, getAdminClient } from "../_shared/zoho.ts";
 import { getStore, tnFetchJson } from "../_shared/tiendanube.ts";
 
 Deno.serve(async (req) => {
@@ -13,10 +12,7 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
+    const admin = getAdminClient();
     const store = await getStore(admin, storeId);
     const params = new URLSearchParams({
       page: String(page),

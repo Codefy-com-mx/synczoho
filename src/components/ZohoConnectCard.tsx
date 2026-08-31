@@ -1,20 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, Link2, CheckCircle2, RefreshCw, Sparkles, ShieldCheck } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-
-interface ZohoOrg {
-  organization_id: string;
-  name: string;
-  currency_code?: string;
-  country?: string;
-}
 
 interface ZohoConnectCardProps {
   storeId: string;
@@ -23,8 +14,6 @@ interface ZohoConnectCardProps {
 const ZOHO_REDIRECT_PATH = '/zoho/callback';
 
 export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [connection, setConnection] = useState<{
@@ -32,9 +21,6 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
     organization_name: string | null;
     status: string;
   } | null>(null);
-  const [orgs, setOrgs] = useState<ZohoOrg[] | null>(null);
-  const [selectedOrg, setSelectedOrg] = useState<string>('');
-  const [pendingState, setPendingState] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
   const redirectUri = `${window.location.origin}${ZOHO_REDIRECT_PATH}`;
@@ -72,40 +58,6 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
     };
   }, [storeId]);
 
-  // Procesar callback OAuth si volvemos con ?code= en /zoho/callback (manejado en route),
-  // o si hay code+state guardados en sessionStorage
-  useEffect(() => {
-    const code = searchParams.get('zoho_code');
-    const state = searchParams.get('zoho_state');
-    if (!code || !state) return;
-
-    (async () => {
-      setConnecting(true);
-      try {
-        const { data, error } = await supabase.functions.invoke('zoho-auth-callback', {
-          body: { code, state, redirect_uri: redirectUri },
-        });
-        if (error) throw error;
-
-        if (data.step === 'select_organization') {
-          setOrgs(data.organizations || []);
-          setPendingState(state);
-          if ((data.organizations || []).length === 1) {
-            setSelectedOrg(data.organizations[0].organization_id);
-          }
-          toast.success('Autorización exitosa. Elegí una organización.');
-        }
-      } catch (e: any) {
-        console.error(e);
-        toast.error(e.message || 'Error procesando callback de Zoho');
-      } finally {
-        setConnecting(false);
-        // Limpiar query
-        navigate('/', { replace: true });
-      }
-    })();
-  }, [searchParams, navigate, redirectUri]);
-
   const handleConnect = async () => {
     setConnecting(true);
     try {
@@ -133,39 +85,6 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
     }
   };
 
-  const handleSelectOrg = async () => {
-    if (!selectedOrg || !pendingState) return;
-    setConnecting(true);
-    try {
-      const org = orgs?.find((o) => o.organization_id === selectedOrg);
-      const { data, error } = await supabase.functions.invoke('zoho-auth-callback', {
-        body: {
-          code: 'noop',
-          state: pendingState,
-          redirect_uri: redirectUri,
-          organization_id: selectedOrg,
-          organization_name: org?.name,
-        },
-      });
-      if (error) throw error;
-      if (data.step === 'connected') {
-        toast.success('Zoho Inventory conectado correctamente');
-        setConnection({
-          organization_id: selectedOrg,
-          organization_name: org?.name || null,
-          status: 'active',
-        });
-        setOrgs(null);
-        setPendingState(null);
-      }
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e.message || 'Error al guardar la organización');
-    } finally {
-      setConnecting(false);
-    }
-  };
-
   const handleDisconnect = async () => {
     setConfirmDisconnect(false);
     try {
@@ -183,7 +102,7 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
   const isConnected = connection?.status === 'active' && connection?.organization_id;
 
   // Estado: aún no conectado y sin orgs pendientes → pantalla hero
-  if (!loading && !isConnected && !orgs) {
+  if (!loading && !isConnected) {
     return (
       <Card className="overflow-hidden border-border">
         <CardContent className="p-0">
@@ -317,28 +236,6 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
             />
             <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(true)}>
               Desconectar
-            </Button>
-          </>
-        ) : orgs ? (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Selecciona la organización de Zoho Inventory que deseas vincular:
-            </p>
-            <Select value={selectedOrg} onValueChange={setSelectedOrg}>
-              <SelectTrigger>
-                <SelectValue placeholder="Seleccionar organización" />
-              </SelectTrigger>
-              <SelectContent>
-                {orgs.map((o) => (
-                  <SelectItem key={o.organization_id} value={o.organization_id}>
-                    {o.name} {o.currency_code ? `(${o.currency_code})` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button size="sm" onClick={handleSelectOrg} disabled={!selectedOrg || connecting}>
-              {connecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-              Confirmar organización
             </Button>
           </>
         ) : null}

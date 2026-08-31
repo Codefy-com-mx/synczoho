@@ -1,22 +1,6 @@
 // Edge function: inicia el flujo OAuth de Zoho Inventory
 // Devuelve la URL de autorización para que el frontend redireccione al usuario.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
-
-// Mapeo de DC -> dominio de accounts.zoho
-const DC_DOMAINS: Record<string, string> = {
-  com: "https://accounts.zoho.com",
-  eu: "https://accounts.zoho.eu",
-  in: "https://accounts.zoho.in",
-  "com.au": "https://accounts.zoho.com.au",
-  jp: "https://accounts.zoho.jp",
-  "com.cn": "https://accounts.zoho.com.cn",
-};
+import { ACCOUNTS_DOMAINS, corsHeaders, getAdminClient } from "../_shared/zoho.ts";
 
 const SCOPES = "ZohoInventory.FullAccess.ALL";
 
@@ -26,8 +10,6 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const clientId = Deno.env.get("ZOHO_CLIENT_ID");
 
     if (!clientId) {
@@ -50,7 +32,7 @@ Deno.serve(async (req) => {
     }
 
     // Verificar que la tienda existe (usando service role, sin requerir sesión)
-    const admin = createClient(supabaseUrl, serviceKey);
+    const admin = getAdminClient();
     const { data: store, error: storeErr } = await admin
       .from("stores")
       .select("store_id, user_id")
@@ -64,7 +46,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const accountsBase = DC_DOMAINS[dc] || DC_DOMAINS.com;
+    const accountsBase = ACCOUNTS_DOMAINS[dc] || ACCOUNTS_DOMAINS.com;
 
     // El state lleva store_id + dc + user_id (si existe)
     const statePayload = JSON.stringify({

@@ -1,29 +1,10 @@
 // Edge function: intercambia code -> tokens, lista organizations y guarda la conexión.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
-
-const ACCOUNTS_DOMAINS: Record<string, string> = {
-  com: "https://accounts.zoho.com",
-  eu: "https://accounts.zoho.eu",
-  in: "https://accounts.zoho.in",
-  "com.au": "https://accounts.zoho.com.au",
-  jp: "https://accounts.zoho.jp",
-  "com.cn": "https://accounts.zoho.com.cn",
-};
-
-const INVENTORY_DOMAINS: Record<string, string> = {
-  com: "https://www.zohoapis.com",
-  eu: "https://www.zohoapis.eu",
-  in: "https://www.zohoapis.in",
-  "com.au": "https://www.zohoapis.com.au",
-  jp: "https://www.zohoapis.jp",
-  "com.cn": "https://www.zohoapis.com.cn",
-};
+import {
+  ACCOUNTS_DOMAINS,
+  corsHeaders,
+  getAdminClient,
+  INVENTORY_DOMAINS,
+} from "../_shared/zoho.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -31,9 +12,6 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const clientId = Deno.env.get("ZOHO_CLIENT_ID");
     const clientSecret = Deno.env.get("ZOHO_CLIENT_SECRET");
 
@@ -44,7 +22,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const adminClient = createClient(supabaseUrl, serviceKey);
+    const adminClient = getAdminClient();
 
     const body = await req.json().catch(() => ({}));
     const code: string | undefined = body.code;

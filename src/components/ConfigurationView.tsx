@@ -4,6 +4,7 @@ import { LogOutIcon, NotificationIcon } from '@nimbus-ds/icons';
 import { ZohoConnectCard } from '@/components/ZohoConnectCard';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FieldHelp } from '@/components/FieldHelp';
+import { CategoryMappingsCard } from '@/components/CategoryMappingsCard';
 import { supabase } from '@/integrations/supabase/client';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
 import { toast } from 'sonner';
@@ -171,6 +172,8 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
           )}
         </Card.Body>
       </Card>
+
+      <CategoryMappingsCard storeId={storeId} />
     </Box>
   );
 }

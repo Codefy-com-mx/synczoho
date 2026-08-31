@@ -1,11 +1,6 @@
 // Webhook receptor de Tiendanube (orders, customers, app lifecycle).
 // Endpoint público — verifica HMAC opcional y procesa eventos.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "*",
-};
+import { corsHeaders, getAdminClient } from "../_shared/zoho.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -18,10 +13,7 @@ Deno.serve(async (req) => {
     const storeId = String(payload.store_id);
     const resourceId = payload.id as number;
 
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
+    const admin = getAdminClient();
 
     await admin.from("webhook_events").insert({
       store_id: storeId,

@@ -10,9 +10,8 @@ import { SyncStockView } from '@/components/SyncStockView';
 import { SyncCustomersView } from '@/components/SyncCustomersView';
 import { SyncLogsView } from '@/components/SyncLogsView';
 import { useNexo } from '@/hooks/useNexo';
-import { Loader2, RefreshCw, CheckCircle, XCircle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import { TIENDANUBE_APP_ID, getEmbeddedAdminAppUrl } from '@/lib/tiendanube';
 import {
   HomeIcon,
   TagIcon,
@@ -30,8 +29,6 @@ export default function Index() {
   const [storeId, setStoreId] = useState<string | null>(null);
   const [storeName, setStoreName] = useState<string>('Mi Tienda');
   const [loading, setLoading] = useState(true);
-  const [authStatus, setAuthStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [authMessage, setAuthMessage] = useState('');
   const [activeSection, setActiveSection] = useState('configuration');
   const [zohoConnected, setZohoConnected] = useState<boolean | null>(null);
   // Cuando recién detectamos conexión completa, llevamos al usuario al Inicio (una sola vez)
@@ -54,59 +51,6 @@ export default function Index() {
       localStorage.removeItem('tiendanube_store_name');
       localStorage.removeItem('tiendanube_store_handle');
       navigate('/', { replace: true });
-      setLoading(false);
-      return;
-    }
-
-    const code = searchParams.get('code');
-
-    if (code) {
-      setAuthStatus('loading');
-      setAuthMessage('Conectando tu tienda...');
-
-      async function exchangeCode() {
-        try {
-          const { data, error } = await supabase.functions.invoke('tiendanube-auth', {
-            body: { code },
-          });
-
-          if (error) throw error;
-
-          if (data.success) {
-            localStorage.setItem('tiendanube_store_id', data.store_id.toString());
-            localStorage.setItem('tiendanube_store_name', data.store_name || 'Mi Tienda');
-            setStoreId(data.store_id.toString());
-            setStoreName(data.store_name || 'Mi Tienda');
-
-            if (data.store_handle) {
-              localStorage.setItem('tiendanube_store_handle', data.store_handle);
-            }
-
-            setAuthStatus('success');
-            setAuthMessage(`¡Tienda "${data.store_name}" conectada exitosamente!`);
-
-            setTimeout(() => {
-              const storeHandle = data.store_handle || localStorage.getItem('tiendanube_store_handle');
-
-              if (storeHandle) {
-                window.location.href = getEmbeddedAdminAppUrl(storeHandle, TIENDANUBE_APP_ID);
-                return;
-              }
-
-              setAuthStatus('idle');
-              navigate('/', { replace: true });
-            }, 2000);
-          } else {
-            throw new Error(data.error || 'Error desconocido');
-          }
-        } catch (err) {
-          console.error('Auth error:', err);
-          setAuthStatus('error');
-          setAuthMessage(err instanceof Error ? err.message : 'Error al conectar la tienda');
-        }
-      }
-
-      exchangeCode();
       setLoading(false);
       return;
     }
@@ -191,37 +135,6 @@ export default function Index() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-6 h-6 text-primary animate-spin" />
-      </div>
-    );
-  }
-
-  if (authStatus === 'loading' || authStatus === 'success' || authStatus === 'error') {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="bg-card rounded-xl p-8 max-w-md w-full text-center border border-border shadow-sm">
-          <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center mx-auto mb-6">
-            <RefreshCw className="w-6 h-6 text-primary-foreground" />
-          </div>
-          <div className="mb-6">
-            {authStatus === 'loading' && <Loader2 className="w-10 h-10 text-primary animate-spin mx-auto" />}
-            {authStatus === 'success' && <CheckCircle className="w-10 h-10 text-green-500 mx-auto" />}
-            {authStatus === 'error' && <XCircle className="w-10 h-10 text-destructive mx-auto" />}
-          </div>
-          <h2 className="text-lg font-bold text-foreground mb-2">
-            {authStatus === 'loading' && 'Conectando tu tienda...'}
-            {authStatus === 'success' && '¡Conectado!'}
-            {authStatus === 'error' && 'Error de conexión'}
-          </h2>
-          <p className="text-muted-foreground text-sm">{authMessage}</p>
-          {authStatus === 'error' && (
-            <button
-              onClick={() => { setAuthStatus('idle'); navigate('/', { replace: true }); }}
-              className="mt-6 px-6 py-2 rounded-lg bg-secondary text-foreground hover:bg-secondary/80 transition-colors text-sm font-medium"
-            >
-              Volver al inicio
-            </button>
-          )}
-        </div>
       </div>
     );
   }

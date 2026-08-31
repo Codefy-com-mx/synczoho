@@ -1,10 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { corsHeaders, getAdminClient } from "../_shared/zoho.ts";
+import { TN_USER_AGENT } from "../_shared/tiendanube.ts";
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -71,7 +67,7 @@ serve(async (req) => {
     const storeResponse = await fetch(`https://api.tiendanube.com/v1/${storeId}/store`, {
       headers: {
         'Authentication': `bearer ${tokenData.access_token}`,
-        'User-Agent': 'TiendaSync (support@lovable.dev)',
+        'User-Agent': TN_USER_AGENT,
         'Content-Type': 'application/json',
       },
     });
@@ -87,9 +83,7 @@ serve(async (req) => {
     }
 
     // Save to database
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabase = getAdminClient();
 
     const { data: existingStore } = await supabase
       .from('stores')

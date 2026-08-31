@@ -1,6 +1,5 @@
 // Crea/actualiza un Sales Order en Zoho a partir de una orden de Tiendanube.
 // Manejado por webhook automático y por reintento manual.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
   corsHeaders,
   getAdminClient,

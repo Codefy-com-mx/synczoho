@@ -184,7 +184,7 @@ export function DashboardView({ storeId, onNavigate }: DashboardViewProps) {
           ) : recentLogs.length === 0 ? (
             <Text color="neutral-textLow">Sin actividad registrada aún.</Text>
           ) : (
-            <Box display="flex" flexDirection="column" gap="0">
+            <Box display="flex" flexDirection="column" gap="none">
               {recentLogs.map((log, i) => (
                 <div
                   key={log.id}

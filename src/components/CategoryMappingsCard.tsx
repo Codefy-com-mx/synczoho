@@ -162,7 +162,7 @@ export function CategoryMappingsCard({ storeId }: Props) {
                   <Text fontSize="caption">No se encontraron categorías en tu cuenta de Zoho Inventory.</Text>
                 </Alert>
               ) : (
-                <Box display="flex" flexDirection="column" gap="0">
+                <Box display="flex" flexDirection="column" gap="none">
                   {/* Header */}
                   <div style={{
                     display: 'grid',
