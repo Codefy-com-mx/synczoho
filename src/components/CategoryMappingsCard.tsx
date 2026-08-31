@@ -238,6 +238,7 @@ export function CategoryMappingsCard({ storeId }: Props) {
                           {currentMap && !dirty && (
                             <Button
                               appearance="danger"
+                              aria-label={`Eliminar mapeo ${zcat.name}`}
                               onClick={() => deleteMapping(zcat.name)}
                               disabled={deleting}
                             >
