@@ -1,0 +1,49 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        VITE_TIENDANUBE_APP_ID: ${TIENDANUBE_CLIENT_ID:-40863}
+        VITE_API_URL: ""
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgresql://synczoho:${SERVICE_PASSWORD_POSTGRES}@database:5432/synczoho
+      APP_URL: ${APP_URL}
+      APP_ORIGIN: ${APP_URL}
+      TIENDANUBE_CLIENT_ID: ${TIENDANUBE_CLIENT_ID}
+      TIENDANUBE_CLIENT_SECRET: ${TIENDANUBE_CLIENT_SECRET}
+      ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID}
+      ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-alertas@synczoho.app}
+    depends_on:
+      database:
+        condition: service_healthy
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: synczoho
+      POSTGRES_USER: synczoho
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+    volumes:
+      - synczoho-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synczoho -d synczoho"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  synczoho-postgres:

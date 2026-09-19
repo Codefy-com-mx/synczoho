@@ -1,37 +1,43 @@
 # ZohoSync
 
-Frontend React/Vite y Edge Functions de Supabase para sincronizar Tiendanube con Zoho Inventory.
+Aplicación React/Vite con API Node.js y PostgreSQL para sincronizar Tiendanube
+con Zoho Inventory. No requiere Supabase.
 
 ## Desarrollo local
 
-Requiere Node.js 22 y npm.
+Requiere Node.js 22 y PostgreSQL 15 o posterior.
 
 ```sh
 cp .env.example .env
 npm ci
-npm run dev
+npm run build
+npm start
 ```
 
-Variables públicas:
+El servidor aplica automáticamente las migraciones de `server/migrations`,
+expone la API en `/api/functions/v1/*`, sirve el frontend compilado y publica el
+healthcheck en `/health`.
+
+Variables obligatorias:
 
 ```env
-VITE_SUPABASE_URL=https://supabase.example.com
-VITE_SUPABASE_PUBLISHABLE_KEY=...
+DATABASE_URL=postgresql://usuario:password@host:5432/synczoho
+APP_URL=https://app.example.com
+APP_ORIGIN=https://app.example.com
 VITE_TIENDANUBE_APP_ID=40863
+TIENDANUBE_CLIENT_ID=40863
+TIENDANUBE_CLIENT_SECRET=...
+ZOHO_CLIENT_ID=...
+ZOHO_CLIENT_SECRET=...
 ```
 
-El callback de la aplicación Tiendanube debe ser `https://<dominio>/auth/callback`.
+Variables opcionales: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `DATABASE_SSL`,
+`DB_POOL_SIZE` y `DISABLE_SCHEDULER`.
 
-## Supabase
+Los callbacks OAuth deben apuntar a:
 
-Las migraciones y funciones están en `supabase/` y funcionan tanto con Supabase administrado como self-hosted.
-
-```sh
-supabase db push --db-url "$DATABASE_URL"
-supabase functions deploy
-```
-
-Configura también los secrets requeridos por las funciones (`TIENDANUBE_CLIENT_ID`, `TIENDANUBE_CLIENT_SECRET`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET` y, para alertas, `RESEND_API_KEY`).
+- Tiendanube: `https://<dominio>/auth/callback`
+- Zoho: `https://<dominio>/zoho/callback`
 
 ## Verificación
 
@@ -41,4 +47,10 @@ npm run check
 
 ## Coolify
 
-Despliega este repositorio como aplicación Nixpacks con Node 22. Define las tres variables `VITE_*` del ejemplo, usa `npm run build` y publica `dist/` mediante el servidor estático de Coolify. Aplica las migraciones y despliega las Edge Functions antes de publicar una versión que dependa de cambios de esquema.
+Despliega `docker-compose.yml` como recurso Docker Compose. Coolify detectará
+las variables sin valor y generará `SERVICE_PASSWORD_POSTGRES`. Asigna el
+dominio público al servicio `app` en el puerto `3000`, define `APP_URL` con ese
+mismo origen HTTPS y configura los cuatro secretos OAuth antes del primer
+despliegue.
+
+El volumen `synczoho-postgres` conserva la base de datos entre despliegues.
