@@ -3,7 +3,7 @@ import {
   Box, Card, Title, Text, Button, Checkbox, Tag, Spinner, Table, Alert, Pagination,
 } from '@nimbus-ds/components';
 import { RedoIcon, CogIcon, CashIcon, ChatDotsIcon } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
 import { FieldHelp } from '@/components/FieldHelp';
 import { toast } from 'sonner';
@@ -47,7 +47,7 @@ export function SyncOrdersView({ storeId }: Props) {
   const bulkSyncPending = async () => {
     setBulkSyncing(true);
     try {
-      const { data, error } = await supabase.functions.invoke('sync-orders-bulk', {
+      const { data, error } = await api.functions.invoke('sync-orders-bulk', {
         body: { storeId, pages: 2, perPage: 50, onlyMissing: true },
       });
       if (error) throw error;
@@ -67,7 +67,7 @@ export function SyncOrdersView({ storeId }: Props) {
   const loadWebhooksStatus = async () => {
     setWebhooksLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('tiendanube-webhooks-manage', {
+      const { data, error } = await api.functions.invoke('tiendanube-webhooks-manage', {
         body: { storeId, action: 'list' },
       });
       if (error) throw error;
@@ -83,7 +83,7 @@ export function SyncOrdersView({ storeId }: Props) {
   const registerWebhooks = async () => {
     setRegisteringWebhooks(true);
     try {
-      const { data, error } = await supabase.functions.invoke('tiendanube-webhooks-manage', {
+      const { data, error } = await api.functions.invoke('tiendanube-webhooks-manage', {
         body: { storeId, action: 'register' },
       });
       if (error) throw error;
@@ -103,7 +103,7 @@ export function SyncOrdersView({ storeId }: Props) {
   const loadOrders = async (p = page) => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('sync-orders-list', {
+      const { data, error } = await api.functions.invoke('sync-orders-list', {
         body: { storeId, page: p, perPage: PER_PAGE },
       });
       if (error) throw error;
@@ -128,7 +128,7 @@ export function SyncOrdersView({ storeId }: Props) {
   const retryOrder = async (orderId: number) => {
     setRetryingId(orderId);
     try {
-      const { data, error } = await supabase.functions.invoke('zoho-create-salesorder', {
+      const { data, error } = await api.functions.invoke('zoho-create-salesorder', {
         body: { storeId, orderId, event: 'manual' },
       });
       if (error) throw error;

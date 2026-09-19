@@ -3,7 +3,7 @@ import {
   Box, Card, Title, Text, Spinner, Alert, Tag, Table, Checkbox,
 } from '@nimbus-ds/components';
 import { RedoIcon } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
 import { ProgressButton } from '@/components/ProgressButton';
 import { FieldHelp } from '@/components/FieldHelp';
@@ -43,7 +43,7 @@ export function SyncCustomersView({ storeId }: Props) {
   } | null>(null);
 
   const loadHistory = useCallback(async () => {
-    const { data } = await supabase.functions.invoke('customers-history', {
+    const { data } = await api.functions.invoke('customers-history', {
       body: { store_id: storeId, limit: 50 },
     });
     setHistory((data?.customers as CustomerRow[]) || []);
@@ -64,7 +64,7 @@ export function SyncCustomersView({ storeId }: Props) {
     setProgress({ current: 0, total: 0 });
     try {
       while (true) {
-        const { data, error } = await supabase.functions.invoke('sync-customers-bulk', {
+        const { data, error } = await api.functions.invoke('sync-customers-bulk', {
           body: { storeId, page, limit: PAGE_SIZE, skipExisting },
         });
         if (error) throw error;

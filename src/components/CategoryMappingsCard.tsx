@@ -3,7 +3,7 @@ import {
   Box, Card, Title, Text, Button, Select, Spinner, Tag, Alert,
 } from '@nimbus-ds/components';
 import { CogIcon, TrashIcon, PlusCircleIcon } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
 interface ZohoCat { id: string; name: string }
@@ -27,7 +27,7 @@ export function CategoryMappingsCard({ storeId }: Props) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('category-mappings', {
+      const { data, error } = await api.functions.invoke('category-mappings', {
         body: { storeId, action: 'list' },
       });
       if (error) throw error;
@@ -58,7 +58,7 @@ export function CategoryMappingsCard({ storeId }: Props) {
     if (!tnCat) return;
     setSavingFor(zohoCategory);
     try {
-      const { data, error } = await supabase.functions.invoke('category-mappings', {
+      const { data, error } = await api.functions.invoke('category-mappings', {
         body: {
           storeId,
           action: 'save',
@@ -84,7 +84,7 @@ export function CategoryMappingsCard({ storeId }: Props) {
   const deleteMapping = async (zohoCategory: string) => {
     setDeletingFor(zohoCategory);
     try {
-      const { data, error } = await supabase.functions.invoke('category-mappings', {
+      const { data, error } = await api.functions.invoke('category-mappings', {
         body: { storeId, action: 'delete', zohoCategory },
       });
       if (error) throw error;

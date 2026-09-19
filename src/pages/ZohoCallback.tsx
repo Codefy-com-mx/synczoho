@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Loader2, CheckCircle2, XCircle, ExternalLink } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TIENDANUBE_APP_ID, getEmbeddedAdminAppUrl } from '@/lib/tiendanube';
@@ -53,7 +53,7 @@ export default function ZohoCallback() {
 
     (async () => {
       try {
-        const { data, error } = await supabase.functions.invoke('zoho-auth-callback', {
+        const { data, error } = await api.functions.invoke('zoho-auth-callback', {
           body: { code, state: stateParam, redirect_uri: redirectUri },
         });
         if (error) throw error;
@@ -82,7 +82,7 @@ export default function ZohoCallback() {
     setSubmitting(true);
     try {
       const org = orgs.find((o) => o.organization_id === selectedOrg);
-      const { data, error } = await supabase.functions.invoke('zoho-auth-callback', {
+      const { data, error } = await api.functions.invoke('zoho-auth-callback', {
         body: {
           code: 'noop',
           state,

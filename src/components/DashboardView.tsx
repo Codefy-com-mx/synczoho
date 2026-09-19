@@ -10,7 +10,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
 } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
 
 interface DashboardViewProps {
@@ -103,7 +103,7 @@ export function DashboardView({ storeId, onNavigate }: DashboardViewProps) {
     async function loadMetrics() {
       setLoading(true);
       try {
-        const { data, error } = await supabase.functions.invoke('dashboard-metrics', {
+        const { data, error } = await api.functions.invoke('dashboard-metrics', {
           body: { store_id: storeId },
         });
         if (error) throw error;
@@ -119,7 +119,7 @@ export function DashboardView({ storeId, onNavigate }: DashboardViewProps) {
     async function loadLogs() {
       setLogsLoading(true);
       try {
-        const { data } = await supabase.functions.invoke('sync-logs-list', {
+        const { data } = await api.functions.invoke('sync-logs-list', {
           body: { store_id: storeId, limit: 5 },
         });
         setRecentLogs(data?.logs ?? []);

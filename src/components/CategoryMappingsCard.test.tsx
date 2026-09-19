@@ -4,8 +4,8 @@ import { CategoryMappingsCard } from './CategoryMappingsCard';
 
 const invoke = vi.hoisted(() => vi.fn());
 
-vi.mock('@/integrations/supabase/client', () => ({
-  supabase: { functions: { invoke } },
+vi.mock('@/lib/api', () => ({
+  api: { functions: { invoke } },
 }));
 
 describe('CategoryMappingsCard', () => {

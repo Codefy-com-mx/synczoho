@@ -5,8 +5,8 @@ import ZohoCallback from './ZohoCallback';
 
 const invoke = vi.hoisted(() => vi.fn());
 
-vi.mock('@/integrations/supabase/client', () => ({
-  supabase: { functions: { invoke } },
+vi.mock('@/lib/api', () => ({
+  api: { functions: { invoke } },
 }));
 
 function renderCallback(url: string) {

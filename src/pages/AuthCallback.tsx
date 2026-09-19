@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { TIENDANUBE_APP_ID, getEmbeddedAdminAppUrl } from '@/lib/tiendanube';
 import { RefreshCw, Loader2, CheckCircle, XCircle } from 'lucide-react';
 
@@ -27,7 +27,7 @@ export default function AuthCallback() {
 
     async function exchangeCode() {
       try {
-        const { data, error } = await supabase.functions.invoke('tiendanube-auth', {
+        const { data, error } = await api.functions.invoke('tiendanube-auth', {
           body: { code },
         });
 

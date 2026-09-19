@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Loader2, Link2, CheckCircle2, RefreshCw, Sparkles, ShieldCheck } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
@@ -30,7 +30,7 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
     let cancelled = false;
     const load = async () => {
       try {
-        const { data, error } = await supabase.functions.invoke('zoho-connection-status', {
+        const { data, error } = await api.functions.invoke('zoho-connection-status', {
           body: { store_id: storeId },
         });
         if (error) throw error;
@@ -61,7 +61,7 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
   const handleConnect = async () => {
     setConnecting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('zoho-auth-start', {
+      const { data, error } = await api.functions.invoke('zoho-auth-start', {
         body: { store_id: storeId, dc: 'com', redirect_uri: redirectUri },
       });
       if (error) throw error;
@@ -88,7 +88,7 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
   const handleDisconnect = async () => {
     setConfirmDisconnect(false);
     try {
-      const { error } = await supabase.functions.invoke('zoho-disconnect', {
+      const { error } = await api.functions.invoke('zoho-disconnect', {
         body: { store_id: storeId },
       });
       if (error) throw error;

@@ -27,7 +27,7 @@ import {
   DownloadIcon,
   CogIcon,
 } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { useSyncSettings, type ProductSyncFields } from '@/hooks/useSyncSettings';
 import { ProgressButton } from '@/components/ProgressButton';
 import { FieldHelp } from '@/components/FieldHelp';
@@ -119,7 +119,7 @@ export function SyncProductsView({ storeId }: SyncProductsViewProps) {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: e } = await supabase.functions.invoke('zoho-list-items', {
+      const { data, error: e } = await api.functions.invoke('zoho-list-items', {
         body: {
           store_id: storeId,
           page: overridePage ?? page,
@@ -236,7 +236,7 @@ export function SyncProductsView({ storeId }: SyncProductsViewProps) {
         };
       });
 
-      const { data, error: e } = await supabase.functions.invoke('zoho-sync-import', {
+      const { data, error: e } = await api.functions.invoke('zoho-sync-import', {
         body: {
           store_id: storeId,
           items: payload,

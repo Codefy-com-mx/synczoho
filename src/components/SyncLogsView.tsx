@@ -3,7 +3,7 @@ import {
   Box, Card, Title, Text, Tag, Select, Button, Spinner, Alert, Table,
 } from '@nimbus-ds/components';
 import { RedoIcon } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 
 interface Props { storeId: string }
 
@@ -67,7 +67,7 @@ export function SyncLogsView({ storeId }: Props) {
       const body: Record<string, unknown> = { store_id: storeId, limit: lim };
       if (op) body.operation = op;
       if (status) body.status = status;
-      const { data, error } = await supabase.functions.invoke('sync-logs-list', { body });
+      const { data, error } = await api.functions.invoke('sync-logs-list', { body });
       if (error) throw error;
       setLogs(data?.logs ?? []);
     } catch {

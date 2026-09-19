@@ -5,7 +5,7 @@ import { ZohoConnectCard } from '@/components/ZohoConnectCard';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FieldHelp } from '@/components/FieldHelp';
 import { CategoryMappingsCard } from '@/components/CategoryMappingsCard';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
 import { toast } from 'sonner';
 
@@ -26,7 +26,7 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
     setConfirmDisconnect(false);
     setDisconnecting(true);
     try {
-      const { error } = await supabase.functions.invoke('tiendanube-disconnect', {
+      const { error } = await api.functions.invoke('tiendanube-disconnect', {
         body: { store_id: storeId },
       });
       if (error) throw error;
@@ -119,7 +119,7 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
                   checked={settings.alert_on_error}
                   onChange={(e) => save({ alert_on_error: e.target.checked })}
                 />
-                <FieldHelp help="Cuando el scheduler automático (stock o precios) detecta errores, te envía un email con el detalle. Requiere configurar un email de destino y la API key de Resend en los secrets de Supabase (RESEND_API_KEY)." />
+                <FieldHelp help="Cuando el scheduler automático (stock o precios) detecta errores, te envía un email con el detalle. Requiere configurar un email de destino y la variable RESEND_API_KEY en Coolify." />
               </Box>
 
               {settings.alert_on_error && (
@@ -158,8 +158,8 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
                   >
                     <Text fontSize="caption" color="neutral-textLow">
                       Para que el envío funcione, el secreto <strong>RESEND_API_KEY</strong> debe estar
-                      configurado en{' '}
-                      <strong>Supabase → Edge Functions → Secrets</strong>.
+                      configurado entre las variables de entorno de la aplicación en{' '}
+                      <strong>Coolify</strong>.
                       Creá una cuenta gratuita en{' '}
                       <strong>resend.com</strong> para obtener tu API key.
                     </Text>

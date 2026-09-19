@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import type { Database } from '@/integrations/supabase/types';
+import { api } from '@/lib/api';
 
 export interface ProductSyncFields {
   name: boolean;
@@ -17,24 +16,31 @@ export interface ProductSyncFields {
   tax: boolean;
 }
 
-type SyncSettingsRow = Database['public']['Tables']['sync_settings']['Row'];
-
-export type SyncSettings = Omit<
-  SyncSettingsRow,
-  | 'products_match_strategy'
-  | 'products_sync_fields'
-  | 'stock_direction'
-  | 'stock_priority'
-  | 'stock_schedule'
-  | 'prices_schedule'
-> & {
+export interface SyncSettings {
+  id?: string;
+  store_id: string;
+  orders_enabled: boolean;
+  orders_create_as_draft: boolean;
+  orders_auto_confirm: boolean;
+  orders_generate_invoice_on_paid: boolean;
+  orders_only_paid: boolean;
+  stock_enabled: boolean;
+  stock_warehouse_id: string | null;
+  customers_auto_sync_on_order: boolean;
+  alert_on_error: boolean;
+  alert_email: string | null;
+  prices_enabled: boolean;
+  products_publish_on_import: boolean;
+  products_overwrite_existing: boolean;
   products_match_strategy: 'sku' | 'name';
   products_sync_fields: ProductSyncFields;
   stock_direction: 'zoho_to_tn' | 'tn_to_zoho' | 'bidirectional';
   stock_priority: 'zoho' | 'tiendanube';
   stock_schedule: 'disabled' | 'hourly' | 'every6h' | 'daily';
   prices_schedule: 'disabled' | 'hourly' | 'every6h' | 'daily';
-};
+  created_at?: string;
+  updated_at?: string;
+}
 
 export function useSyncSettings(storeId: string | null) {
   const [settings, setSettings] = useState<SyncSettings | null>(null);
@@ -45,11 +51,11 @@ export function useSyncSettings(storeId: string | null) {
     if (!storeId) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('sync-settings', {
+      const { data, error } = await api.functions.invoke<{ settings: SyncSettings }>('sync-settings', {
         body: { storeId, action: 'get' },
       });
       if (error) throw error;
-      setSettings(data.settings);
+      if (data) setSettings(data.settings);
     } finally {
       setLoading(false);
     }
@@ -62,11 +68,11 @@ export function useSyncSettings(storeId: string | null) {
     setSaving(true);
     try {
       const merged = { ...settings, ...patch };
-      const { data, error } = await supabase.functions.invoke('sync-settings', {
+      const { data, error } = await api.functions.invoke<{ settings: SyncSettings }>('sync-settings', {
         body: { storeId, action: 'save', settings: merged },
       });
       if (error) throw error;
-      setSettings(data.settings);
+      if (data) setSettings(data.settings);
     } finally {
       setSaving(false);
     }

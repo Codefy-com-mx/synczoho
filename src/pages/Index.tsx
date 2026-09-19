@@ -11,7 +11,7 @@ import { SyncCustomersView } from '@/components/SyncCustomersView';
 import { SyncLogsView } from '@/components/SyncLogsView';
 import { useNexo } from '@/hooks/useNexo';
 import { Loader2 } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import {
   HomeIcon,
   TagIcon,
@@ -61,7 +61,7 @@ export default function Index() {
     if (id) {
       // Verificar que la tienda sigue activa en la DB antes de mostrar el dashboard.
       // store_found: false significa que la tienda fue eliminada (ej: app desinstalada desde TN)
-      supabase
+      api
         .functions.invoke('zoho-connection-status', { body: { store_id: id } })
         .then(({ data, error }) => {
           const storeGone = error || data?.store_found === false;
@@ -88,7 +88,7 @@ export default function Index() {
     let cancelled = false;
     const check = async () => {
       try {
-        const { data } = await supabase.functions.invoke('zoho-connection-status', {
+        const { data } = await api.functions.invoke('zoho-connection-status', {
           body: { store_id: storeId },
         });
         if (!cancelled) {

@@ -3,7 +3,7 @@ import {
   Box, Card, Title, Text, Checkbox, Select, Spinner, Alert, Tag, Table, Button,
 } from '@nimbus-ds/components';
 import { RedoIcon, EyeIcon } from '@nimbus-ds/icons';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
 import { ProgressButton } from '@/components/ProgressButton';
 import { FieldHelp } from '@/components/FieldHelp';
@@ -35,7 +35,7 @@ export function SyncStockView({ storeId }: Props) {
     setPreviewing(true);
     setPreviewResult(null);
     try {
-      const { data, error } = await supabase.functions.invoke('sync-stock-run', {
+      const { data, error } = await api.functions.invoke('sync-stock-run', {
         body: { storeId, dryRun: true },
       });
       if (error) throw error;
@@ -61,7 +61,7 @@ export function SyncStockView({ storeId }: Props) {
     setPreviewResult(null);
     setProgress({ current: 0, total: 0 });
     try {
-      const { data, error } = await supabase.functions.invoke('sync-stock-run', { body: { storeId } });
+      const { data, error } = await api.functions.invoke('sync-stock-run', { body: { storeId } });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
       setProgress({ current: data.total || 0, total: data.total || 0 });
