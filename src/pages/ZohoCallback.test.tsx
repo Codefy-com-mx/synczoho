@@ -53,7 +53,6 @@ describe('ZohoCallback', () => {
       body: {
         state: 'state-1',
         organization_id: 'org-1',
-        organization_name: 'Organización Demo',
       },
     });
   });

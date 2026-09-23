@@ -14,6 +14,7 @@ const REQUIRED_EVENTS = [
   "customer/updated",
   "app/uninstalled",
   "app/suspended",
+  "app/resumed",
 ];
 
 export default serve(async (req) => {

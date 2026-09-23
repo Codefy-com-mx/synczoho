@@ -32,7 +32,6 @@ export default function ZohoCallback() {
   const stateParam = searchParams.get('state');
   const oauthError = searchParams.get('error');
 
-  const redirectUri = `${window.location.origin}/zoho/callback`;
   const storeHandle = typeof window !== 'undefined'
     ? localStorage.getItem('tiendanube_store_handle')
     : null;
@@ -54,7 +53,7 @@ export default function ZohoCallback() {
     (async () => {
       try {
         const { data, error } = await api.functions.invoke('zoho-auth-callback', {
-          body: { code, state: stateParam, redirect_uri: redirectUri },
+          body: { code, state: stateParam },
         });
         if (error) throw error;
         if (data?.error) throw new Error(data.error);
@@ -75,20 +74,16 @@ export default function ZohoCallback() {
         setStep('error');
       }
     })();
-  }, [code, stateParam, oauthError, redirectUri]);
+  }, [code, stateParam, oauthError]);
 
   const handleConfirmOrg = async () => {
     if (!selectedOrg) return;
     setSubmitting(true);
     try {
-      const org = orgs.find((o) => o.organization_id === selectedOrg);
       const { data, error } = await api.functions.invoke('zoho-auth-callback', {
         body: {
-          code: 'noop',
           state,
-          redirect_uri: redirectUri,
           organization_id: selectedOrg,
-          organization_name: org?.name,
         },
       });
       if (error) throw error;

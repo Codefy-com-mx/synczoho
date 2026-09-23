@@ -4,6 +4,7 @@ import { serve } from "../../runtime.js";
 // órdenes manuales o cuando los webhooks no estaban registrados.
 import { corsHeaders, getAdminClient, logSync } from "../_shared/zoho.js";
 import { getStore, tnFetchJson } from "../_shared/tiendanube.js";
+import createSalesorder from "../zoho-create-salesorder/index.js";
 
 export default serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -14,7 +15,6 @@ export default serve(async (req) => {
 
     const admin = getAdminClient();
     const store = await getStore(admin, storeId);
-    const internalUrl = process.env.INTERNAL_API_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
 
     // Recolectar órdenes recientes
     const allOrders: any[] = [];
@@ -58,11 +58,11 @@ export default serve(async (req) => {
 
     for (const o of toSync) {
       try {
-        const r = await fetch(`${internalUrl}/api/functions/v1/zoho-create-salesorder`, {
+        const r = await createSalesorder(new Request("http://internal/functions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ storeId, orderId: o.id, event: "bulk" }),
-        });
+        }));
         const j = await r.json();
         if (j?.skipped) skipCount++;
         else if (j?.ok || j?.salesorder_id) okCount++;

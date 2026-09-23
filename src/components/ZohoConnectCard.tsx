@@ -11,8 +11,6 @@ interface ZohoConnectCardProps {
   storeId: string;
 }
 
-const ZOHO_REDIRECT_PATH = '/zoho/callback';
-
 export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -22,8 +20,6 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
     status: string;
   } | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-
-  const redirectUri = `${window.location.origin}${ZOHO_REDIRECT_PATH}`;
 
   // Cargar conexión actual via edge function (evita problemas de RLS sin sesión)
   useEffect(() => {
@@ -62,7 +58,7 @@ export function ZohoConnectCard({ storeId }: ZohoConnectCardProps) {
     setConnecting(true);
     try {
       const { data, error } = await api.functions.invoke('zoho-auth-start', {
-        body: { store_id: storeId, dc: 'com', redirect_uri: redirectUri },
+        body: { store_id: storeId, dc: 'com' },
       });
       if (error) throw error;
       if (data.auth_url) {

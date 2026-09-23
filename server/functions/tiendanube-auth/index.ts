@@ -42,24 +42,21 @@ export default serve(async (req) => {
     });
 
     if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error('Token exchange failed:', errorText);
+      console.error('Token exchange failed:', tokenResponse.status);
       return new Response(
-        JSON.stringify({ error: 'Failed to exchange authorization code', details: errorText }),
+        JSON.stringify({ error: 'Failed to exchange authorization code' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     const tokenData = await tokenResponse.json();
-    console.log('Token response keys:', Object.keys(tokenData));
-    console.log('Token response:', JSON.stringify(tokenData));
 
     const storeId = tokenData.user_id || tokenData.store_id || tokenData.id;
 
     if (!storeId) {
       return new Response(
-        JSON.stringify({ error: 'No store ID returned from Tiendanube', tokenKeys: Object.keys(tokenData) }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'No store ID returned from Tiendanube' }),
+        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -126,10 +123,9 @@ export default serve(async (req) => {
     );
 
   } catch (error) {
-    console.error('Auth error:', error);
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Auth error:', error instanceof Error ? error.name : 'unknown');
     return new Response(
-      JSON.stringify({ error: 'Internal server error', details: message }),
+      JSON.stringify({ error: 'Internal server error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

@@ -55,32 +55,9 @@ export default function Index() {
       return;
     }
 
-    const id = localStorage.getItem('tiendanube_store_id');
-    const name = localStorage.getItem('tiendanube_store_name');
-
-    if (id) {
-      // Verificar que la tienda sigue activa en la DB antes de mostrar el dashboard.
-      // store_found: false significa que la tienda fue eliminada (ej: app desinstalada desde TN)
-      api
-        .functions.invoke('zoho-connection-status', { body: { store_id: id } })
-        .then(({ data, error }) => {
-          const storeGone = error || data?.store_found === false;
-          if (storeGone) {
-            // La tienda ya no existe en la DB — limpiar estado local y mostrar landing
-            localStorage.removeItem('tiendanube_store_id');
-            localStorage.removeItem('tiendanube_store_name');
-            localStorage.removeItem('tiendanube_store_handle');
-            setStoreId(null);
-          } else {
-            setStoreId(id);
-            if (name) setStoreName(name);
-          }
-          setLoading(false);
-        });
-    } else {
-      setLoading(false);
-    }
-  }, [searchParams, navigate, isEmbedded, isConnected, storeInfo]);
+    // localStorage is a navigation hint, never merchant authentication.
+    if (nexoChecked && !isEmbedded) setLoading(false);
+  }, [searchParams, navigate, isEmbedded, isConnected, storeInfo, nexoChecked]);
 
   // Verificar estado de Zoho una vez que tengamos storeId
   useEffect(() => {
