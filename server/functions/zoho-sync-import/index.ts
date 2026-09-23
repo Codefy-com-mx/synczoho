@@ -99,6 +99,7 @@ export default serve(async (req) => {
         m.tn_category_id,
       ]),
     );
+    let tnCategories: Map<string, number> | null = null;
 
     const results: Array<{
       zoho_item_id: string;
@@ -117,7 +118,46 @@ export default serve(async (req) => {
         let tnProductId: number | null = entry.tiendanube_product_id || null;
 
         if (entry.action === "create") {
-          const payload = buildCreatePayload(product, F, publish, catMap);
+          const payload = buildCreatePayload(product, F, publish);
+          if (F.category && product.category_name) {
+            let categoryId = catMap.get(product.category_name);
+            if (!categoryId) {
+              if (!tnCategories) {
+                tnCategories = new Map();
+                for (let page = 1; ; page++) {
+                  const resp = await tnFetchWithRetry(store, `/categories?per_page=200&page=${page}&fields=id,name`);
+                  const categories = await resp.json();
+                  if (!resp.ok) throw new Error(tnErr(categories, resp.status));
+                  if (!Array.isArray(categories)) throw new Error("Respuesta inválida de categorías de Tiendanube");
+                  for (const category of categories) {
+                    for (const name of Object.values(category.name || {})) {
+                      if (typeof name === "string" && Number.isSafeInteger(category.id)) {
+                        tnCategories.set(name.trim().toLowerCase(), category.id);
+                      }
+                    }
+                  }
+                  if (categories.length < 200) break;
+                }
+              }
+              const name = product.category_name.trim();
+              categoryId = tnCategories.get(name.toLowerCase());
+              if (!categoryId) {
+                const resp = await tnFetchWithRetry(store, "/categories", {
+                  method: "POST",
+                  body: JSON.stringify({ name: { es: name } }),
+                });
+                const created = await resp.json();
+                if (!resp.ok) throw new Error(tnErr(created, resp.status));
+                categoryId = Number(created.id);
+                if (!Number.isSafeInteger(categoryId) || categoryId <= 0) {
+                  throw new Error("Tiendanube no devolvió un ID de categoría válido");
+                }
+                tnCategories.set(name.toLowerCase(), categoryId);
+              }
+              catMap.set(product.category_name, categoryId);
+            }
+            payload.categories = [categoryId];
+          }
           if (F.images) {
             const imgs = await fetchProductImages(admin, conn, product);
             if (imgs.length > 0) payload.images = imgs;
@@ -373,21 +413,12 @@ function buildCreatePayload(
   p: ZohoProductData,
   F: typeof DEFAULT_FIELDS,
   publish: boolean,
-  catMap: Map<string, number> = new Map(),
 ): Record<string, any> {
   const payload: Record<string, any> = { published: publish };
 
   if (F.name) payload.name = { es: p.name };
   if (F.description) payload.description = { es: p.description || "" };
   if (F.brand && p.brand) payload.brand = p.brand;
-  if (F.category && p.category_name) {
-    const mappedId = catMap.get(p.category_name);
-    // Si existe un mapeo explícito → usar ID de TN (evita duplicados por nombre)
-    // Si no → crear/buscar por nombre (comportamiento previo)
-    payload.categories = mappedId
-      ? [{ id: mappedId }]
-      : [{ name: { es: p.category_name } }];
-  }
 
   // attributes en TN: array de nombres traducibles
   if (p.attribute_names.length > 0) {
