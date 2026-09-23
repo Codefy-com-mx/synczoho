@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { serve } from "../../runtime.js";
+import { getPool } from "../../db.js";
+import { claimScheduledRun, finishScheduledRun } from "../../scheduler.js";
 // Scheduler automático: recorre todas las tiendas con schedule activo y ejecuta
 // sync de stock y/o precios si ha pasado el intervalo configurado.
 // El servidor Node lo invoca periódicamente; también puede llamarse por HTTP.
@@ -36,21 +39,58 @@ async function sendAlert(storeId: string, operation: string, errorMessage: strin
   }
 }
 
-async function getLastRunTime(
-  admin: ReturnType<typeof getAdminClient>,
-  storeId: string,
-  operation: string,
-): Promise<number> {
-  const { data } = await admin
-    .from("sync_logs")
-    .select("created_at")
-    .eq("store_id", storeId)
-    .eq("operation", operation)
-    .eq("status", "success")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data ? new Date(data.created_at).getTime() : 0;
+interface ScheduledOperation {
+  storeId: string;
+  operation: "stock_sync_run" | "price_sync_run";
+  childFunction: "sync-stock-run" | "sync-prices-run";
+  intervalMs: number;
+}
+
+// Runs one scheduled operation only after atomically claiming its attempt in
+// `scheduled_sync_state`. A failed, partial, or still-running attempt stays
+// anchored at its claim time and is retried after the configured interval, not
+// on the next tick. A 200 response with errors is recorded as a failure.
+async function runScheduledOperation({
+  storeId,
+  operation,
+  childFunction,
+  intervalMs,
+}: ScheduledOperation): Promise<string> {
+  const pool = getPool();
+  const attemptToken = randomUUID();
+  const claimed = await claimScheduledRun(pool, { storeId, operation, intervalMs, attemptToken });
+  if (!claimed) return "skip (not yet due)";
+
+  let response: any = null;
+  let errorMessage: string | null = null;
+  try {
+    response = await callFunction(childFunction, { storeId });
+    if (!response) {
+      errorMessage = "La función no respondió correctamente";
+    } else if (response.errors > 0) {
+      errorMessage = `${response.errors} error(s) · ${response.updated} actualizados`;
+    }
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : "Error inesperado";
+  }
+
+  const outcome = errorMessage ? "error" : "success";
+  const recorded = await finishScheduledRun(pool, {
+    storeId,
+    operation,
+    attemptToken,
+    outcome,
+    errorMessage,
+  });
+
+  // A superseded attempt must not overwrite the newer attempt's state or send
+  // a duplicate alert.
+  if (!recorded) return "skip (attempt superseded)";
+  if (errorMessage) {
+    await sendAlert(storeId, operation, errorMessage);
+    return `error (${errorMessage})`;
+  }
+  return `ok (updated:${response.updated ?? "?"}, errors:${response.errors ?? 0})`;
 }
 
 export default serve(async (req) => {
@@ -80,39 +120,28 @@ export default serve(async (req) => {
     if (!stores || stores.length === 0) return json({ ran: 0, skipped: 0, elapsed_ms: Date.now() - t0 });
 
     const results: { store_id: string; stock?: string; prices?: string }[] = [];
-    const now = Date.now();
 
     for (const s of stores) {
       const result: { store_id: string; stock?: string; prices?: string } = { store_id: s.store_id };
 
       // ── Stock ────────────────────────────────────────────────────────────────
       if (s.stock_enabled && s.stock_schedule !== "disabled" && INTERVALS_MS[s.stock_schedule]) {
-        const lastRun = await getLastRunTime(admin, s.store_id, "stock_sync_run");
-        if (now - lastRun >= INTERVALS_MS[s.stock_schedule]) {
-          const r = await callFunction("sync-stock-run", { storeId: s.store_id });
-          if (r && r.errors > 0) {
-            await sendAlert(s.store_id, "stock_sync_run", `${r.errors} error(s) · ${r.updated} actualizados`);
-          }
-          result.stock = r ? `ok (updated:${r.updated ?? "?"}, errors:${r.errors ?? 0})` : "error (null response)";
-          if (!r) await sendAlert(s.store_id, "stock_sync_run", "La función no respondió correctamente");
-        } else {
-          result.stock = "skip (not yet due)";
-        }
+        result.stock = await runScheduledOperation({
+          storeId: s.store_id,
+          operation: "stock_sync_run",
+          childFunction: "sync-stock-run",
+          intervalMs: INTERVALS_MS[s.stock_schedule],
+        });
       }
 
       // ── Prices ───────────────────────────────────────────────────────────────
       if (s.prices_enabled && s.prices_schedule !== "disabled" && INTERVALS_MS[s.prices_schedule]) {
-        const lastRun = await getLastRunTime(admin, s.store_id, "price_sync_run");
-        if (now - lastRun >= INTERVALS_MS[s.prices_schedule]) {
-          const r = await callFunction("sync-prices-run", { storeId: s.store_id });
-          if (r && r.errors > 0) {
-            await sendAlert(s.store_id, "price_sync_run", `${r.errors} error(s) · ${r.updated} actualizados`);
-          }
-          result.prices = r ? `ok (updated:${r.updated ?? "?"}, errors:${r.errors ?? 0})` : "error (null response)";
-          if (!r) await sendAlert(s.store_id, "price_sync_run", "La función no respondió correctamente");
-        } else {
-          result.prices = "skip (not yet due)";
-        }
+        result.prices = await runScheduledOperation({
+          storeId: s.store_id,
+          operation: "price_sync_run",
+          childFunction: "sync-prices-run",
+          intervalMs: INTERVALS_MS[s.prices_schedule],
+        });
       }
 
       results.push(result);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { closeDatabase, getPool } from "./db.js";
 import { handlers } from "./handlers.js";
 import { runMigrations } from "./migrate.js";
+import { createTickGuard } from "./scheduler.js";
 import { applySecurityHeaders } from "./security-headers.js";
 
 const port = Number(process.env.PORT || 3000);
@@ -165,7 +166,9 @@ server.listen(port, host, () => {
 });
 
 if (process.env.DISABLE_SCHEDULER !== "true") {
-  const runScheduler = async () => {
+  // A tick that is still running blocks the next one instead of overlapping
+  // it. A hanging child keeps the guard busy until it settles.
+  const runScheduler = createTickGuard(async () => {
     try {
       const handler = handlers["sync-auto-run"];
       const result = await handler(new Request(`http://127.0.0.1:${port}/api/functions/v1/sync-auto-run`, {
@@ -177,7 +180,7 @@ if (process.env.DISABLE_SCHEDULER !== "true") {
     } catch (error) {
       console.error("Scheduled sync failed", error);
     }
-  };
+  }, () => console.log("Scheduled sync tick skipped: previous tick still running"));
   setTimeout(runScheduler, 30_000).unref();
   setInterval(runScheduler, 15 * 60_000).unref();
 }
