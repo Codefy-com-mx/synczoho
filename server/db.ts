@@ -1,4 +1,4 @@
-import pg from "pg";
+import pg, { type PoolConfig } from "pg";
 
 const { Pool } = pg;
 
@@ -244,20 +244,45 @@ export class DatabaseClient {
 
 let pool: pg.Pool | null = null;
 let database: DatabaseClient | null = null;
+let lockPool: pg.Pool | null = null;
 
-export function getPool(): pg.Pool {
-  if (pool) return pool;
+function poolConfig(max: number): PoolConfig {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL is required");
-  pool = new Pool({
+  return {
     connectionString,
-    max: Number(process.env.DB_POOL_SIZE || 10),
+    max,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
     ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined,
-  });
+  };
+}
+
+export function getPool(): pg.Pool {
+  if (pool) return pool;
+  pool = new Pool(poolConfig(Number(process.env.DB_POOL_SIZE || 10)));
   pool.on("error", (error) => console.error("Unexpected PostgreSQL pool error", error));
   return pool;
+}
+
+/**
+ * Dedicated bounded pool for the per-(store, operation) session advisory
+ * locks held by real stock/price runs.
+ *
+ * Keeping lock connections out of the main data pool prevents a long run from
+ * starving handler queries, including a DB_POOL_SIZE=1 deployment, and lets
+ * DB_POOL_SIZE size only the data workload. The lock pool is still bounded:
+ * when every lock connection is held, `pg.Pool.connect()` waits up to
+ * `connectionTimeoutMillis` and then rejects, so a request fails instead of
+ * overlapping another run. No pool can guarantee a live lock forever: if a
+ * database connection dies mid-run, PostgreSQL releases the session lock once
+ * it notices the dead connection, and until then a competing run is skipped.
+ */
+export function getLockPool(): pg.Pool {
+  if (lockPool) return lockPool;
+  lockPool = new Pool(poolConfig(Number(process.env.DB_LOCK_POOL_SIZE || 4)));
+  lockPool.on("error", (error) => console.error("Unexpected PostgreSQL lock pool error", error));
+  return lockPool;
 }
 
 export function getDatabase(): DatabaseClient {
@@ -266,7 +291,11 @@ export function getDatabase(): DatabaseClient {
 }
 
 export async function closeDatabase(): Promise<void> {
-  if (pool) await pool.end();
+  const data = pool;
+  const locks = lockPool;
   pool = null;
   database = null;
+  lockPool = null;
+  // End both pools even when one of them fails to close.
+  await Promise.all([data?.end(), locks?.end()]);
 }

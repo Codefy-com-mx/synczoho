@@ -97,7 +97,7 @@ class FakeSyncStatePool implements ScheduledSyncPool {
         string,
         string,
         string,
-        "success" | "error",
+        "success" | "error" | "skipped",
         string | null,
       ];
       const key = `${storeId}:${operation}`;
@@ -266,6 +266,21 @@ describe("finishScheduledRun", () => {
     expect(row?.lastSuccessAt).toBeNull();
   });
 
+  it("records a neutral skip without refreshing the last success anchor", async () => {
+    const pool = new FakeSyncStatePool();
+    await claimScheduledRun(pool, claimOptions("attempt-a"));
+
+    const recorded = await finishScheduledRun(pool, {
+      ...claimOptions("attempt-a"),
+      outcome: "skipped",
+    });
+
+    expect(recorded).toBe(true);
+    const row = pool.rows.get("store-1:stock_sync_run");
+    expect(row?.status).toBe("skipped");
+    expect(row?.lastSuccessAt).toBeNull();
+  });
+
   it("ignores a terminal update from a superseded attempt", async () => {
     const pool = new FakeSyncStatePool();
     pool.seed("store-1", "stock_sync_run", {
@@ -326,6 +341,13 @@ function readScheduledStateMigration(): string {
   );
 }
 
+function readSkippedOutcomeMigration(): string {
+  return readFileSync(
+    path.resolve(process.cwd(), "server/migrations/003_scheduler_skipped.sql"),
+    "utf8",
+  );
+}
+
 describe("scheduled admission SQL", () => {
   it("claims through an atomic conditional upsert anchored at claim time", () => {
     expect(CLAIM_SCHEDULED_RUN_SQL).toContain("ON CONFLICT (store_id, operation) DO UPDATE");
@@ -373,5 +395,17 @@ describe("scheduled admission SQL", () => {
     expect(migration).not.toContain("INSERT INTO scheduled_sync_state");
     expect(migration).not.toContain("FROM sync_logs");
     expect(migration).not.toContain("CREATE INDEX");
+  });
+
+  it("allows the neutral skipped outcome through migration 003 without rewriting 002", () => {
+    const migration = readSkippedOutcomeMigration();
+
+    expect(migration).toContain("DROP CONSTRAINT IF EXISTS scheduled_sync_state_status_check");
+    expect(migration).toContain(
+      "CHECK (status IN ('idle', 'running', 'success', 'error', 'skipped'))",
+    );
+    expect(readScheduledStateMigration()).toContain(
+      "CHECK (status IN ('idle', 'running', 'success', 'error'))",
+    );
   });
 });

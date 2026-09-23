@@ -14,7 +14,7 @@ export interface ScheduledSyncPool {
   ): Promise<{ rowCount: number | null; rows: unknown[] }>;
 }
 
-export type ScheduledAttemptOutcome = "success" | "error";
+export type ScheduledAttemptOutcome = "success" | "error" | "skipped";
 
 /**
  * Claims a due scheduled attempt. The conditional upsert is atomic across
@@ -70,7 +70,10 @@ RETURNING store_id, operation, attempt_token
 /**
  * Records the terminal outcome of an attempt. The attempt-token guard makes
  * the update a no-op when a newer attempt already claimed the slot, which also
- * prevents duplicate alerts from a stale attempt.
+ * prevents duplicate alerts from a stale attempt. `skipped` records a neutral
+ * outcome: a child that refused to start because another real run holds the
+ * per-(store, operation) advisory lock. It never refreshes `last_success_at`,
+ * so the retry stays anchored at the claim time, and it must not alert.
  */
 export const FINISH_SCHEDULED_RUN_SQL = `
 UPDATE scheduled_sync_state

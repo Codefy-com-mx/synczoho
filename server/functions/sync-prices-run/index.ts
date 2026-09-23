@@ -1,4 +1,6 @@
 import { serve } from "../../runtime.js";
+import { getLockPool, type DatabaseClient } from "../../db.js";
+import { acquireSyncLock, type SyncLockHandle } from "../../sync-lock.js";
 // Sincroniza precios de Zoho Inventory → Tiendanube vía PATCH /products/stock-price.
 // Soporta dryRun (preview sin aplicar cambios).
 import {
@@ -41,11 +43,29 @@ function json(payload: unknown, status = 200) {
 export default serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   const t0 = Date.now();
+  let storeId: string | null = null;
+  let admin: DatabaseClient | null = null;
+  let lock: SyncLockHandle | null = null;
+  let terminalLogged = false;
   try {
-    const { storeId, dryRun = false } = await req.json();
+    const body = await req.json();
+    storeId = typeof body?.storeId === "string" ? body.storeId : null;
+    const dryRun = body?.dryRun === true;
     if (!storeId) return json({ error: "storeId requerido" }, 400);
 
-    const admin = getAdminClient();
+    // A real run takes the per-(store, operation) session advisory lock before
+    // any Zoho/Tiendanube call. The lock comes from the dedicated lock pool so
+    // it cannot starve handler queries. Contention returns a neutral response
+    // without touching the network; dry runs stay lock-free and make no sync
+    // writes, although the shared Zoho helper may still refresh credentials.
+    if (!dryRun) {
+      lock = await acquireSyncLock(getLockPool(), { storeId, operation: "price_sync_run" });
+      if (!lock) {
+        return json({ skipped: true, reason: "already_running" });
+      }
+    }
+
+    admin = getAdminClient();
     const conn = await getZohoConnection(admin, storeId);
     const store = await getStore(admin, storeId);
 
@@ -219,6 +239,7 @@ export default serve(async (req) => {
       duration_ms: Date.now() - t0,
       payload: { updated, in_sync: alreadySync.length, errors, unmatched: unmatched.length },
     });
+    terminalLogged = true;
 
     return json({
       dry_run: false,
@@ -233,6 +254,22 @@ export default serve(async (req) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error";
     console.error("sync-prices-run error", msg);
+    // Best-effort terminal log: the shared logSync helper swallows write
+    // failures and does not inspect QueryResult.error, so this row may be
+    // missing. The guard only avoids a duplicate row when the run already
+    // recorded its partial result.
+    if (admin && storeId && !terminalLogged) {
+      await logSync(admin, storeId, {
+        operation: "price_sync_run",
+        status: "error",
+        message: msg,
+        duration_ms: Date.now() - t0,
+      });
+    }
     return json({ error: msg }, 500);
+  } finally {
+    // The advisory lock and its pooled session must be released on every path,
+    // including hard errors and interrupted runs.
+    if (lock) await lock.release();
   }
 });

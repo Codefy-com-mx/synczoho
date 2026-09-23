@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { serve } from "../../runtime.js";
 import { getPool } from "../../db.js";
-import { claimScheduledRun, finishScheduledRun } from "../../scheduler.js";
+import { claimScheduledRun, finishScheduledRun, type ScheduledAttemptOutcome } from "../../scheduler.js";
 // Scheduler automático: recorre todas las tiendas con schedule activo y ejecuta
 // sync de stock y/o precios si ha pasado el intervalo configurado.
 // El servidor Node lo invoca periódicamente; también puede llamarse por HTTP.
@@ -49,7 +49,9 @@ interface ScheduledOperation {
 // Runs one scheduled operation only after atomically claiming its attempt in
 // `scheduled_sync_state`. A failed, partial, or still-running attempt stays
 // anchored at its claim time and is retried after the configured interval, not
-// on the next tick. A 200 response with errors is recorded as a failure.
+// on the next tick. A 200 response with errors is recorded as a failure. A
+// child that reports `already_running` is neutral: the attempt is recorded as
+// `skipped`, no alert is sent, and the success anchor is left untouched.
 async function runScheduledOperation({
   storeId,
   operation,
@@ -74,18 +76,30 @@ async function runScheduledOperation({
     errorMessage = error instanceof Error ? error.message : "Error inesperado";
   }
 
-  const outcome = errorMessage ? "error" : "success";
+  // A child that refused to start because another real run holds the
+  // per-(store, operation) advisory lock is neither a success nor a failure:
+  // recording it as `skipped` keeps the retry anchored at the claim time and
+  // avoids a duplicate alert for a run that is already in progress.
+  const skippedReason = response?.skipped === true ? String(response.reason || "skipped") : null;
+  const outcome: ScheduledAttemptOutcome = skippedReason
+    ? "skipped"
+    : errorMessage
+      ? "error"
+      : "success";
   const recorded = await finishScheduledRun(pool, {
     storeId,
     operation,
     attemptToken,
     outcome,
-    errorMessage,
+    errorMessage: skippedReason ? null : errorMessage,
   });
 
   // A superseded attempt must not overwrite the newer attempt's state or send
   // a duplicate alert.
   if (!recorded) return "skip (attempt superseded)";
+  if (skippedReason) {
+    return skippedReason === "already_running" ? "skip (already running)" : `skip (${skippedReason})`;
+  }
   if (errorMessage) {
     await sendAlert(storeId, operation, errorMessage);
     return `error (${errorMessage})`;

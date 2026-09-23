@@ -124,7 +124,7 @@ class FakeSyncStatePool {
         string,
         string,
         string,
-        "success" | "error",
+        "success" | "error" | "skipped",
         string | null,
       ];
       const row = this.rows.get(`${storeId}:${operation}`);
@@ -323,5 +323,31 @@ describe("sync-auto-run scheduled admission", () => {
     expect(childCalls()[0].url).toContain("/sync-prices-run");
     expect(pool.claimCalls[0][1]).toBe("price_sync_run");
     expect(pool.claimCalls[0][3]).toBe(6 * 3600);
+  });
+
+  it("treats a child that is already running as a neutral skip without alerting", async () => {
+    h.child.payload = { skipped: true, reason: "already_running" };
+
+    const { response, payload } = await runHandler();
+
+    expect(response.status).toBe(200);
+    expect(payload.results).toEqual([{ store_id: "store-1", stock: "skip (already running)" }]);
+    expect(pool.finishCalls).toHaveLength(1);
+    expect(pool.finishCalls[0][3]).toBe("skipped");
+    expect(pool.finishCalls[0][4]).toBeNull();
+    expect(h.alertCalls).toHaveLength(0);
+    expect(pool.rows.get("store-1:stock_sync_run")?.lastSuccessAt).toBeNull();
+  });
+
+  it("keeps the retry anchored at claim time after a neutral skip", async () => {
+    h.child.payload = { skipped: true, reason: "already_running" };
+
+    const first = await runHandler();
+    const second = await runHandler();
+
+    expect(first.payload.results[0].stock).toBe("skip (already running)");
+    expect(second.payload.results[0].stock).toBe("skip (not yet due)");
+    expect(childCalls()).toHaveLength(1);
+    expect(h.alertCalls).toHaveLength(0);
   });
 });
