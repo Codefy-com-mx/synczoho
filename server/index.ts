@@ -4,6 +4,7 @@ import path from "node:path";
 import { closeDatabase, getPool } from "./db.js";
 import { handlers } from "./handlers.js";
 import { runMigrations } from "./migrate.js";
+import { applySecurityHeaders } from "./security-headers.js";
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
@@ -26,13 +27,6 @@ const mimeTypes: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
 };
-
-function applySecurityHeaders(response: ServerResponse): void {
-  response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("X-Frame-Options", "SAMEORIGIN");
-  response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-}
 
 function sendJson(response: ServerResponse, status: number, payload: unknown): void {
   applySecurityHeaders(response);
