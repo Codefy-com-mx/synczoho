@@ -1,11 +1,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CLAIM_SCHEDULED_RUN_SQL,
   FINISH_SCHEDULED_RUN_SQL,
   claimScheduledRun,
-  createTickGuard,
   finishScheduledRun,
   type ScheduledSyncPool,
 } from "../../server/scheduler";
@@ -79,8 +78,8 @@ class FakeSyncStatePool implements ScheduledSyncPool {
       if (this.hasRecentSuccess(storeId, operation, intervalSeconds)) return { rows: [], rowCount: 0 };
       const key = `${storeId}:${operation}`;
       const existing = this.rows.get(key);
-      const anchor = existing?.startedAt ?? existing?.lastSuccessAt ?? null;
-      const due = !existing || anchor === null || anchor <= Date.now() - intervalSeconds * 1000;
+      const anchor = Math.max(existing?.startedAt ?? 0, existing?.lastSuccessAt ?? 0);
+      const due = !existing || anchor <= Date.now() - intervalSeconds * 1000;
       if (!due) return { rows: [], rowCount: 0 };
       this.rows.set(key, {
         attemptToken,
@@ -131,7 +130,10 @@ describe("claimScheduledRun", () => {
 
   it("keeps the cadence from the last recorded success when no success log is present", async () => {
     const pool = new FakeSyncStatePool();
-    pool.seed("store-1", "stock_sync_run", { lastSuccessAt: Date.now() - 10 * 60_000 });
+    pool.seed("store-1", "stock_sync_run", {
+      startedAt: Date.now() - 2 * HOUR_MS,
+      lastSuccessAt: Date.now() - 10 * 60_000,
+    });
 
     expect(await claimScheduledRun(pool, claimOptions("attempt-a"))).toBe(false);
   });
@@ -300,40 +302,6 @@ describe("finishScheduledRun", () => {
   });
 });
 
-describe("createTickGuard", () => {
-  it("skips a tick while the previous one is still running", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const run = vi.fn(() => gate);
-    const onSkip = vi.fn();
-    const tick = createTickGuard(run, onSkip);
-
-    const first = tick();
-    const second = tick();
-
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(onSkip).toHaveBeenCalledTimes(1);
-
-    release();
-    await Promise.all([first, second]);
-    await tick();
-
-    expect(run).toHaveBeenCalledTimes(2);
-  });
-
-  it("releases the guard after a failed tick", async () => {
-    const run = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(undefined);
-    const tick = createTickGuard(run);
-
-    await expect(tick()).rejects.toThrow("boom");
-    await tick();
-
-    expect(run).toHaveBeenCalledTimes(2);
-  });
-});
-
 function readScheduledStateMigration(): string {
   return readFileSync(
     path.resolve(process.cwd(), "server/migrations/002_scheduled_sync_state.sql"),
@@ -349,10 +317,10 @@ function readSkippedOutcomeMigration(): string {
 }
 
 describe("scheduled admission SQL", () => {
-  it("claims through an atomic conditional upsert anchored at claim time", () => {
+  it("claims through an atomic conditional upsert anchored at the later of claim and success", () => {
     expect(CLAIM_SCHEDULED_RUN_SQL).toContain("ON CONFLICT (store_id, operation) DO UPDATE");
     expect(CLAIM_SCHEDULED_RUN_SQL).toContain(
-      "WHERE COALESCE(state.started_at, state.last_success_at",
+      "WHERE GREATEST(\n    COALESCE(state.started_at",
     );
     expect(CLAIM_SCHEDULED_RUN_SQL).toContain("RETURNING store_id, operation, attempt_token");
   });

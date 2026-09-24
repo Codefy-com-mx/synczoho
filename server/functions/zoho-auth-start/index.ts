@@ -2,6 +2,8 @@ import { serve } from "../../runtime.js";
 // Edge function: inicia el flujo OAuth de Zoho Inventory
 // Devuelve la URL de autorización para que el frontend redireccione al usuario.
 import { ACCOUNTS_DOMAINS, corsHeaders, getAdminClient } from "../_shared/zoho.js";
+import { createOAuthState } from "../_shared/oauth-state.js";
+import { getPool } from "../../db.js";
 
 const SCOPES = "ZohoInventory.FullAccess.ALL";
 
@@ -23,20 +25,21 @@ export default serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const storeId: string | undefined = body.store_id;
     const dc: string = body.dc || "com";
-    const redirectUri: string = body.redirect_uri;
+    const appUrl = process.env.APP_URL?.replace(/\/$/, "");
+    const redirectUri = appUrl && `${appUrl}/zoho/callback`;
 
-    if (!storeId || !redirectUri) {
+    if (!storeId || !redirectUri || !Object.prototype.hasOwnProperty.call(ACCOUNTS_DOMAINS, dc)) {
       return new Response(
-        JSON.stringify({ error: "store_id and redirect_uri are required" }),
+        JSON.stringify({ error: "store_id, APP_URL and valid dc are required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Verificar que la tienda existe (usando service role, sin requerir sesión)
+    // La ruta exige sesión Nexo de esta tienda antes de llegar aquí.
     const admin = getAdminClient();
     const { data: store, error: storeErr } = await admin
       .from("stores")
-      .select("store_id, user_id")
+      .select("store_id")
       .eq("store_id", storeId)
       .maybeSingle();
 
@@ -47,16 +50,12 @@ export default serve(async (req) => {
       });
     }
 
-    const accountsBase = ACCOUNTS_DOMAINS[dc] || ACCOUNTS_DOMAINS.com;
-
-    // El state lleva store_id + dc + user_id (si existe)
-    const statePayload = JSON.stringify({
-      s: storeId,
-      d: dc,
-      u: store.user_id || null,
-      t: Date.now(),
-    });
-    const state = btoa(statePayload);
+    const accountsBase = ACCOUNTS_DOMAINS[dc];
+    const { state, nonce, expiresAt } = createOAuthState(storeId, dc);
+    await getPool().query(
+      "INSERT INTO zoho_oauth_states (nonce, store_id, expires_at) VALUES ($1, $2, $3)",
+      [nonce, storeId, expiresAt],
+    );
 
     const authUrl = new URL(`${accountsBase}/oauth/v2/auth`);
     authUrl.searchParams.set("scope", SCOPES);
@@ -72,9 +71,9 @@ export default serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (e) {
-    console.error("zoho-auth-start error", e);
+    console.error("zoho-auth-start error", e instanceof Error ? e.name : "unknown");
     return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "unknown" }),
+      JSON.stringify({ error: "Could not start Zoho authorization" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }

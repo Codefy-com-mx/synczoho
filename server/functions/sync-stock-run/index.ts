@@ -333,11 +333,8 @@ export default serve(async (req) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error";
     console.error("sync-stock-run error", msg);
-    // Best-effort terminal log: the shared logSync helper swallows write
-    // failures and does not inspect QueryResult.error, so this row may be
-    // missing. The guard only avoids a duplicate row when the run already
-    // recorded its partial result.
-    if (admin && storeId && !terminalLogged) {
+    // Only a real run that acquired the lock should produce a terminal log.
+    if (lock && admin && storeId && !terminalLogged) {
       await logSync(admin, storeId, {
         operation: "stock_sync_run",
         status: "error",

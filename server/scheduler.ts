@@ -1,10 +1,6 @@
 /**
- * Shared single-flight helpers for the scheduled stock/price syncs.
- *
- * `createTickGuard` keeps one Node process from starting a new scheduler tick
- * while the previous one is still running. `claimScheduledRun` and
- * `finishScheduledRun` make the per-(store, operation) admission decision
- * atomic across replicas through the `scheduled_sync_state` table.
+ * Per-(store, operation) scheduled admission across replicas through the
+ * `scheduled_sync_state` table.
  */
 
 export interface ScheduledSyncPool {
@@ -22,11 +18,10 @@ export type ScheduledAttemptOutcome = "success" | "error" | "skipped";
  * every other caller hits the conflict and fails the WHERE guard, so the
  * statement returns no rows.
  *
- * The retry anchor is `started_at`, falling back to the `last_success_at`
- * recorded by the last successful attempt, so a failed, partial, or
- * still-running attempt is not retried until its configured interval has
- * elapsed. A crash leaves the row marked `running`; the slot becomes
- * claimable again after the interval.
+ * The retry anchor is the later of `started_at` and `last_success_at`, so a
+ * failed or still-running attempt is spaced from its claim while a successful
+ * one is spaced from its completion. A crashed run becomes claimable again
+ * after the interval.
  *
  * The claim is also gated on recent successful `sync_logs` rows for the same
  * store and operation, so a successful manual run postpones the next
@@ -61,7 +56,10 @@ ON CONFLICT (store_id, operation) DO UPDATE SET
   finished_at = NULL,
   last_error = NULL,
   updated_at = now()
-WHERE COALESCE(state.started_at, state.last_success_at, 'epoch'::timestamptz)
+WHERE GREATEST(
+    COALESCE(state.started_at, 'epoch'::timestamptz),
+    COALESCE(state.last_success_at, 'epoch'::timestamptz)
+  )
     <= now() - make_interval(secs => $4::double precision)
   AND ${RECENT_SUCCESS_GATE}
 RETURNING store_id, operation, attempt_token
@@ -126,28 +124,4 @@ export async function finishScheduledRun(
     options.errorMessage ?? null,
   ]);
   return (result.rowCount ?? result.rows.length) > 0;
-}
-
-/**
- * Wraps the scheduler entry point so a tick that is still running blocks the
- * next one instead of overlapping it. A hanging child keeps the guard busy;
- * no cancellation or timeout is applied here (SCHED-2 owns child protection).
- */
-export function createTickGuard(
-  run: () => Promise<void>,
-  onSkip?: () => void,
-): () => Promise<void> {
-  let inFlight = false;
-  return async () => {
-    if (inFlight) {
-      onSkip?.();
-      return;
-    }
-    inFlight = true;
-    try {
-      await run();
-    } finally {
-      inFlight = false;
-    }
-  };
 }

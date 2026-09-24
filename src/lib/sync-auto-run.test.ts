@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLAIM_SCHEDULED_RUN_SQL, FINISH_SCHEDULED_RUN_SQL } from "../../server/scheduler";
 
 const h = vi.hoisted(() => ({
@@ -29,6 +29,26 @@ vi.mock("../../server/functions/_shared/zoho.js", () => ({
       return builder;
     },
   }),
+}));
+
+async function mockChild(name: string, request: Request): Promise<Response> {
+  h.fetchCalls.push({ url: `/${name}`, body: await request.json() });
+  if (h.child.kind === "throw") throw new Error("network down");
+  if (h.child.kind === "status") return new Response("failure", { status: h.child.status });
+  return Response.json(h.child.payload);
+}
+
+vi.mock("../../server/functions/sync-stock-run/index.js", () => ({
+  default: (request: Request) => mockChild("sync-stock-run", request),
+}));
+vi.mock("../../server/functions/sync-prices-run/index.js", () => ({
+  default: (request: Request) => mockChild("sync-prices-run", request),
+}));
+vi.mock("../../server/functions/send-alert-email/index.js", () => ({
+  default: async (request: Request) => {
+    h.alertCalls.push(await request.json());
+    return Response.json({ sent: true });
+  },
 }));
 
 import syncAutoRun from "../../server/functions/sync-auto-run/index";
@@ -104,8 +124,8 @@ class FakeSyncStatePool {
       if (this.hasRecentSuccess(storeId, operation, intervalSeconds)) return { rows: [], rowCount: 0 };
       const key = `${storeId}:${operation}`;
       const existing = this.rows.get(key);
-      const anchor = existing?.startedAt ?? existing?.lastSuccessAt ?? null;
-      if (existing && anchor !== null && anchor > Date.now() - intervalSeconds * 1000) {
+      const anchor = Math.max(existing?.startedAt ?? 0, existing?.lastSuccessAt ?? 0);
+      if (existing && anchor > Date.now() - intervalSeconds * 1000) {
         return { rows: [], rowCount: 0 };
       }
       this.rows.set(key, {
@@ -177,28 +197,6 @@ beforeEach(() => {
   h.alertCalls = [];
   h.child = { kind: "json", status: 200, payload: { updated: 0, errors: 0 } };
   scheduleStore();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      const body = init?.body ? JSON.parse(String(init.body)) : null;
-      h.fetchCalls.push({ url, body });
-      if (url.includes("/send-alert-email")) {
-        h.alertCalls.push(body);
-        return Response.json({ sent: true });
-      }
-      if (url.includes("/sync-stock-run") || url.includes("/sync-prices-run")) {
-        if (h.child.kind === "throw") throw new Error("network down");
-        if (h.child.kind === "status") return new Response("failure", { status: h.child.status });
-        return Response.json(h.child.payload);
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    }),
-  );
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
 });
 
 describe("sync-auto-run scheduled admission", () => {

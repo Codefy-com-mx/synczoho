@@ -3,7 +3,7 @@ import { TIENDANUBE_APP_ID } from "@/lib/tiendanube";
 
 const instance = nexo.create({
   clientId: TIENDANUBE_APP_ID,
-  log: true,
+  log: false,
 });
 
 export default instance;

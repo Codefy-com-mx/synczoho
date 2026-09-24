@@ -31,13 +31,46 @@ ZOHO_CLIENT_ID=...
 ZOHO_CLIENT_SECRET=...
 ```
 
-Variables opcionales: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `DATABASE_SSL`,
-`DB_POOL_SIZE` y `DISABLE_SCHEDULER`.
+Variables adicionales para atender solicitudes de privacidad:
+`RESEND_API_KEY`, `RESEND_FROM_EMAIL` y `PRIVACY_CONTACT_EMAIL` (un
+buzón interno autorizado). Sin ellas, las solicitudes quedan pendientes y se
+reintentan; no se confirman como atendidas. Otras variables opcionales:
+`DATABASE_SSL`, `DB_POOL_SIZE` y `DISABLE_SCHEDULER`.
+El worker de webhooks reserva una conexión para el bloqueo por tienda; el
+pool usa al menos dos conexiones aunque `DB_POOL_SIZE` sea menor.
 
 Los callbacks OAuth deben apuntar a:
 
 - Tiendanube: `https://<dominio>/auth/callback`
 - Zoho: `https://<dominio>/zoho/callback`
+
+En el panel de Partners de Tiendanube, configura los tres webhooks
+**obligatorios de privacidad** (no se registran mediante la API):
+
+- URL webhook store redact: `https://<dominio>/api/functions/v1/privacy-store-redact`
+- URL webhook customers redact: `https://<dominio>/api/functions/v1/privacy-customer-redact`
+- URL webhook customers data request: `https://<dominio>/api/functions/v1/privacy-data-request`
+
+El receptor verifica `x-linkedstore-hmac-sha256` contra el cuerpo original
+antes de guardar el evento. El worker reintenta fallos desde PostgreSQL.
+`store/redact` elimina los datos locales de la tienda. `customers/redact`
+borra mapeos locales y crea una tarea en `privacy_requests` para revisar
+manualmente los datos del cliente en Zoho. `customers/data_request` envía
+un informe de los datos locales al correo del propietario obtenido de la
+API de Tiendanube; si no puede verificarse, lo remite al buzón de privacidad como
+tarea manual. Las tareas `pending_manual` **requieren seguimiento humano**;
+recibir HTTP 200 no significa haber completado la solicitud legal. Para
+solicitudes sin correo verificable, confirma el canal de entrega antes de
+marcar la tarea como completada.
+
+```sql
+SELECT * FROM privacy_requests WHERE status = 'pending_manual' ORDER BY created_at;
+SELECT id, event_type, error_message, attempts
+FROM webhook_events WHERE processed = false ORDER BY created_at;
+-- Solo después de resolver la solicitud con el comerciante/Zoho:
+UPDATE privacy_requests SET status = 'completed', completed_at = now()
+WHERE event_id = '<id-del-evento>' AND status = 'pending_manual';
+```
 
 ## Verificación
 

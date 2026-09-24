@@ -77,14 +77,14 @@ describe("lock connection pool", () => {
     expect(h.pools).toHaveLength(2);
   });
 
-  it("keeps its own default when the data pool is size one", async () => {
+  it("keeps its own default when the data pool configuration is size one", async () => {
     setEnv("DB_POOL_SIZE", "1");
     const db = await loadDatabaseModule();
 
     db.getPool();
     db.getLockPool();
 
-    expect(h.pools[0].options.max).toBe(1);
+    expect(h.pools[0].options.max).toBe(2);
     expect(h.pools[1].options.max).toBe(4);
   });
 

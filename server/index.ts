@@ -4,8 +4,9 @@ import path from "node:path";
 import { closeDatabase, getPool } from "./db.js";
 import { handlers } from "./handlers.js";
 import { runMigrations } from "./migrate.js";
-import { createTickGuard } from "./scheduler.js";
 import { applySecurityHeaders } from "./security-headers.js";
+import { authorizeFunction } from "./auth.js";
+import { runWebhookWorker } from "./webhook-worker.js";
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
@@ -81,9 +82,11 @@ async function serveFunction(request: IncomingMessage, response: ServerResponse,
     return;
   }
   try {
-    await sendWebResponse(response, await handler(await toWebRequest(request)));
+    const webRequest = await toWebRequest(request);
+    const denied = await authorizeFunction(name, webRequest);
+    await sendWebResponse(response, denied || await handler(webRequest));
   } catch (error) {
-    console.error(`Function ${name} failed`, error);
+    console.error(`Function ${name} failed`, error instanceof Error ? error.name : "unknown");
     sendJson(response, error instanceof Error && error.message.includes("too large") ? 413 : 500, {
       error: "Internal server error",
     });
@@ -166,9 +169,9 @@ server.listen(port, host, () => {
 });
 
 if (process.env.DISABLE_SCHEDULER !== "true") {
-  // A tick that is still running blocks the next one instead of overlapping
-  // it. A hanging child keeps the guard busy until it settles.
-  const runScheduler = createTickGuard(async () => {
+  setTimeout(() => void runWebhookWorker().catch(console.error), 5_000).unref();
+  setInterval(() => void runWebhookWorker().catch(console.error), 10_000).unref();
+  const runScheduler = async () => {
     try {
       const handler = handlers["sync-auto-run"];
       const result = await handler(new Request(`http://127.0.0.1:${port}/api/functions/v1/sync-auto-run`, {
@@ -180,7 +183,7 @@ if (process.env.DISABLE_SCHEDULER !== "true") {
     } catch (error) {
       console.error("Scheduled sync failed", error);
     }
-  }, () => console.log("Scheduled sync tick skipped: previous tick still running"));
+  };
   setTimeout(runScheduler, 30_000).unref();
   setInterval(runScheduler, 15 * 60_000).unref();
 }

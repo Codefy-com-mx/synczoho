@@ -6,6 +6,9 @@ import { claimScheduledRun, finishScheduledRun, type ScheduledAttemptOutcome } f
 // sync de stock y/o precios si ha pasado el intervalo configurado.
 // El servidor Node lo invoca periódicamente; también puede llamarse por HTTP.
 import { corsHeaders, getAdminClient } from "../_shared/zoho.js";
+import sendAlertEmail from "../send-alert-email/index.js";
+import syncStockRun from "../sync-stock-run/index.js";
+import syncPricesRun from "../sync-prices-run/index.js";
 
 const INTERVALS_MS: Record<string, number> = {
   hourly:   1 * 60 * 60 * 1000,
@@ -21,13 +24,13 @@ function json(payload: unknown, status = 200) {
 }
 
 async function callFunction(name: string, body: unknown) {
-  const baseUrl = process.env.INTERNAL_API_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
-  const url = `${baseUrl}/api/functions/v1/${name}`;
-  const r = await fetch(url, {
+  const handler = { "send-alert-email": sendAlertEmail, "sync-stock-run": syncStockRun, "sync-prices-run": syncPricesRun }[name];
+  if (!handler) throw new Error(`Unknown internal function: ${name}`);
+  const r = await handler(new Request("http://internal/functions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }));
   return r.ok ? await r.json() : null;
 }
 

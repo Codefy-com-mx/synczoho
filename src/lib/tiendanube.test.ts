@@ -24,6 +24,6 @@ describe('configuración de Tiendanube', () => {
   it('configura Nexo con la misma constante', async () => {
     await import('./nexoClient');
 
-    expect(create).toHaveBeenCalledWith({ clientId: '40863', log: true });
+    expect(create).toHaveBeenCalledWith({ clientId: '40863', log: false });
   });
 });

@@ -6,8 +6,11 @@ import Index from "./pages/Index";
 import AuthCallback from "./pages/AuthCallback";
 import ZohoCallback from "./pages/ZohoCallback";
 import NotFound from "./pages/NotFound";
+import { ErrorBoundary } from "@tiendanube/nexo";
+import nexo from "@/lib/nexoClient";
 
 const App = () => (
+  <ErrorBoundary nexo={nexo}>
   <TooltipProvider>
     <Toaster />
     <BrowserRouter>
@@ -21,6 +24,7 @@ const App = () => (
       </NexoSyncRoute>
     </BrowserRouter>
   </TooltipProvider>
+  </ErrorBoundary>
 );
 
 export default App;

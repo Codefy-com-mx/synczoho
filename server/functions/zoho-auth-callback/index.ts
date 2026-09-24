@@ -1,189 +1,120 @@
 import { serve } from "../../runtime.js";
-// Edge function: intercambia code -> tokens, lista organizations y guarda la conexión.
-import {
-  ACCOUNTS_DOMAINS,
-  corsHeaders,
-  getAdminClient,
-  INVENTORY_DOMAINS,
-} from "../_shared/zoho.js";
+import { getPool } from "../../db.js";
+import { ACCOUNTS_DOMAINS, corsHeaders, INVENTORY_DOMAINS } from "../_shared/zoho.js";
+import { verifyOAuthState } from "../_shared/oauth-state.js";
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status, headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+interface Organization { organization_id: string; name: string; currency_code?: string; country?: string }
 
 export default serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
-    const clientId = Deno.env.get("ZOHO_CLIENT_ID");
-    const clientSecret = Deno.env.get("ZOHO_CLIENT_SECRET");
-
-    if (!clientId || !clientSecret) {
-      return new Response(
-        JSON.stringify({ error: "Zoho client credentials not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    const adminClient = getAdminClient();
-
     const body = await req.json().catch(() => ({}));
-    const code: string | undefined = body.code;
-    const state: string | undefined = body.state;
-    const redirectUri: string | undefined = body.redirect_uri;
-    const organizationId: string | undefined = body.organization_id;
-    const organizationName: string | undefined = body.organization_name;
+    const state = typeof body.state === "string" ? verifyOAuthState(body.state) : null;
+    if (!state || !Object.prototype.hasOwnProperty.call(ACCOUNTS_DOMAINS, state.d)) return json({ error: "Invalid or expired state" }, 400);
+    const pool = getPool();
 
-    if (!code || !state || !redirectUri) {
-      return new Response(
-        JSON.stringify({ error: "code, state and redirect_uri required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+    if (body.organization_id) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const store = await client.query("SELECT 1 FROM stores WHERE store_id=$1 FOR SHARE", [state.s]);
+        if (!store.rowCount) throw new Error("Store not installed");
+        const pending = await client.query<{ organizations: Organization[] }>(
+          "SELECT organizations FROM zoho_oauth_states WHERE nonce=$1 AND store_id=$2 AND phase='pending_org' AND expires_at>now() FOR UPDATE",
+          [state.n, state.s],
+        );
+        const org = pending.rows[0]?.organizations?.find((item) => item.organization_id === String(body.organization_id));
+        if (!org) {
+          await client.query("ROLLBACK");
+          return json({ error: "Invalid organization or consumed state" }, 400);
+        }
+        const updated = await client.query(
+          "UPDATE zoho_connections SET organization_id=$1, organization_name=$2, status='active', oauth_nonce=NULL WHERE store_id=$3 AND status='pending_org' AND oauth_nonce=$4",
+          [org.organization_id, org.name, state.s, state.n],
+        );
+        if (!updated.rowCount) throw new Error("Pending connection missing");
+        await client.query("UPDATE zoho_oauth_states SET phase='complete', organizations=NULL WHERE nonce=$1", [state.n]);
+        await client.query("COMMIT");
+        return json({ step: "connected", organization_id: org.organization_id });
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
     }
 
-    let parsedState: { s: string; d: string; u: string | null; t: number };
+    if (typeof body.code !== "string" || !body.code) return json({ error: "Authorization code required" }, 400);
+    const claimed = await pool.query(
+      "UPDATE zoho_oauth_states SET phase='exchanging' WHERE nonce=$1 AND store_id=$2 AND phase='issued' AND expires_at>now() RETURNING nonce",
+      [state.n, state.s],
+    );
+    if (!claimed.rowCount) return json({ error: "State already used or expired" }, 400);
+
+    const clientId = process.env.ZOHO_CLIENT_ID;
+    const clientSecret = process.env.ZOHO_CLIENT_SECRET;
+    const appUrl = process.env.APP_URL?.replace(/\/$/, "");
+    if (!clientId || !clientSecret || !appUrl) return json({ error: "OAuth not configured" }, 500);
+    const tokenResp = await fetch(`${ACCOUNTS_DOMAINS[state.d]}/oauth/v2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code", client_id: clientId, client_secret: clientSecret,
+        redirect_uri: `${appUrl}/zoho/callback`, code: body.code,
+      }),
+    });
+    const token = await tokenResp.json();
+    if (!tokenResp.ok || !token.access_token || !token.refresh_token) return json({ error: "Zoho token exchange failed" }, 400);
+
+    const orgResp = await fetch(`${INVENTORY_DOMAINS[state.d]}/inventory/v1/organizations`, {
+      headers: { Authorization: `Zoho-oauthtoken ${token.access_token}` },
+    });
+    const orgData = await orgResp.json();
+    if (!orgResp.ok || !Array.isArray(orgData.organizations)) return json({ error: "Failed to list organizations" }, 502);
+    const organizations: Organization[] = orgData.organizations.map((org: Record<string, unknown>) => ({
+      organization_id: String(org.organization_id), name: String(org.name || ""),
+      currency_code: typeof org.currency_code === "string" ? org.currency_code : undefined,
+      country: typeof org.country === "string" ? org.country : undefined,
+    }));
+    const single = organizations.length === 1 ? organizations[0] : null;
+    const expiresAt = new Date(Date.now() + Math.max(60, Number(token.expires_in || 3600) - 60) * 1000);
+    const client = await pool.connect();
     try {
-      parsedState = JSON.parse(atob(state));
-    } catch {
-      return new Response(JSON.stringify({ error: "Invalid state" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const storeId = parsedState.s;
-    const dc = parsedState.d || "com";
-    const accountsBase = ACCOUNTS_DOMAINS[dc] || ACCOUNTS_DOMAINS.com;
-    const inventoryBase = INVENTORY_DOMAINS[dc] || INVENTORY_DOMAINS.com;
-
-    // Verificar que la tienda existe (usando service role)
-    const { data: store } = await adminClient
-      .from("stores")
-      .select("store_id")
-      .eq("store_id", storeId)
-      .maybeSingle();
-
-    if (!store) {
-      return new Response(JSON.stringify({ error: "Store not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Caso 1: aún no se eligió organization → intercambiar code y devolver lista
-    if (!organizationId) {
-      const tokenResp = await fetch(`${accountsBase}/oauth/v2/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: redirectUri,
-          code,
-        }),
-      });
-
-      const tokenData = await tokenResp.json();
-      if (!tokenResp.ok || tokenData.error) {
-        console.error("Zoho token error", tokenData);
-        return new Response(
-          JSON.stringify({ error: tokenData.error || "Token exchange failed", details: tokenData }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      const accessToken: string = tokenData.access_token;
-      const refreshToken: string = tokenData.refresh_token;
-      const expiresIn: number = tokenData.expires_in || 3600;
-      const scope: string = tokenData.scope || "";
-
-      // Listar organizations
-      const orgsResp = await fetch(`${inventoryBase}/inventory/v1/organizations`, {
-        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-      });
-      const orgsData = await orgsResp.json();
-
-      if (!orgsResp.ok) {
-        console.error("Zoho orgs error", orgsData);
-        return new Response(
-          JSON.stringify({ error: "Failed to list organizations", details: orgsData }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      const organizations = (orgsData.organizations || []).map((o: any) => ({
-        organization_id: String(o.organization_id),
-        name: o.name,
-        currency_code: o.currency_code,
-        country: o.country,
-      }));
-
-      // Guardar tokens temporalmente (sin org aún) para poder elegir org sin re-OAuth
-      const expiresAt = new Date(Date.now() + (expiresIn - 60) * 1000).toISOString();
-      await adminClient
-        .from("zoho_connections")
-        .upsert(
-          {
-            store_id: storeId,
-            access_token: accessToken,
-            refresh_token: refreshToken,
-            token_expires_at: expiresAt,
-            scope,
-            dc,
-            status: "pending_org",
-          },
-          { onConflict: "store_id" },
-        );
-
-      return new Response(
-        JSON.stringify({
-          step: "select_organization",
-          organizations,
-          dc,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      await client.query("BEGIN");
+      const store = await client.query("SELECT 1 FROM stores WHERE store_id=$1 FOR SHARE", [state.s]);
+      if (!store.rowCount) throw new Error("Store not installed");
+      await client.query(`
+        INSERT INTO zoho_connections (store_id, access_token, refresh_token, token_expires_at, scope, dc, status, organization_id, organization_name, oauth_nonce)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (store_id) DO UPDATE SET access_token=EXCLUDED.access_token, refresh_token=EXCLUDED.refresh_token,
+          token_expires_at=EXCLUDED.token_expires_at, scope=EXCLUDED.scope, dc=EXCLUDED.dc,
+          status=EXCLUDED.status, organization_id=EXCLUDED.organization_id, organization_name=EXCLUDED.organization_name,
+          oauth_nonce=EXCLUDED.oauth_nonce`,
+        [state.s, token.access_token, token.refresh_token, expiresAt, token.scope || "", state.d,
+          single ? "active" : "pending_org", single?.organization_id || null, single?.name || null,
+          single ? null : state.n],
       );
+      await client.query("UPDATE zoho_oauth_states SET phase=$1, organizations=$2 WHERE nonce=$3", [
+        single ? "complete" : "pending_org", single ? null : JSON.stringify(organizations), state.n,
+      ]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
     }
-
-    // Caso 2: ya se eligió organization → actualizar registro existente
-    const { data: existing } = await adminClient
-      .from("zoho_connections")
-      .select("id, refresh_token, dc")
-      .eq("store_id", storeId)
-      .maybeSingle();
-
-    if (!existing) {
-      return new Response(
-        JSON.stringify({ error: "No pending connection found. Restart OAuth." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    const { error: updateErr } = await adminClient
-      .from("zoho_connections")
-      .update({
-        organization_id: organizationId,
-        organization_name: organizationName || null,
-        status: "active",
-      })
-      .eq("store_id", storeId);
-
-    if (updateErr) {
-      console.error("Update error", updateErr);
-      return new Response(
-        JSON.stringify({ error: updateErr.message }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    return new Response(
-      JSON.stringify({ step: "connected", organization_id: organizationId }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
-  } catch (e) {
-    console.error("zoho-auth-callback error", e);
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "unknown" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return single
+      ? json({ step: "connected", organization_id: single.organization_id })
+      : json({ step: "select_organization", organizations, dc: state.d });
+  } catch (error) {
+    console.error("zoho-auth-callback error", error instanceof Error ? error.name : "unknown");
+    return json({ error: "OAuth callback failed" }, 500);
   }
 });

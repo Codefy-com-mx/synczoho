@@ -260,7 +260,7 @@ function poolConfig(max: number): PoolConfig {
 
 export function getPool(): pg.Pool {
   if (pool) return pool;
-  pool = new Pool(poolConfig(Number(process.env.DB_POOL_SIZE || 10)));
+  pool = new Pool(poolConfig(Math.max(2, Number(process.env.DB_POOL_SIZE || 10))));
   pool.on("error", (error) => console.error("Unexpected PostgreSQL pool error", error));
   return pool;
 }
