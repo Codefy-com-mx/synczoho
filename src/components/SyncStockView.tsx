@@ -64,6 +64,12 @@ export function SyncStockView({ storeId }: Props) {
       const { data, error } = await api.functions.invoke('sync-stock-run', { body: { storeId } });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
+      // A run refused by the single-flight lock is neither a success nor a
+      // failure: inform the user without rendering a completed result.
+      if (data?.skipped) {
+        toast.info('Ya hay una sincronización de stock en curso. Espera a que termine e inténtalo de nuevo.');
+        return;
+      }
       setProgress({ current: data.total || 0, total: data.total || 0 });
       setLastResult({ updated: data.updated, errors: data.errors, total: data.total, inSync: data.inSync });
       toast.success(`Sincronización completa: ${data.updated} actualizados, ${data.errors} errores`);

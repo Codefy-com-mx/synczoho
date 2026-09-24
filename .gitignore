@@ -27,3 +27,6 @@ supabase/.temp/
 *.sln
 *.sw?
 .vercel
+
+# Local ODD artifacts
+odd/
