@@ -53,7 +53,7 @@ En el panel de Partners de Tiendanube, configura los tres webhooks
 
 El receptor verifica `x-linkedstore-hmac-sha256` contra el cuerpo original
 antes de guardar el evento. El worker reintenta fallos desde PostgreSQL.
-`app/store_redact` elimina los datos locales de la tienda. `customer/redact`
+`store/redact` elimina los datos locales de la tienda. `customers/redact`
 borra mapeos locales y crea una tarea en `privacy_requests` para revisar
 manualmente los datos del cliente en Zoho. `customers/data_request` envía
 un informe de los datos locales al correo del propietario obtenido de la

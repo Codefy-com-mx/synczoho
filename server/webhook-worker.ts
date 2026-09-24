@@ -59,13 +59,13 @@ async function processEvent(row: EventRow): Promise<void> {
     await pool.query("DELETE FROM stores WHERE store_id=$1", [storeId]);
     return;
   }
-  if (event === "app/store_redact") {
+  if (event === "store/redact") {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       for (const table of storeTables) await client.query(`DELETE FROM ${table} WHERE store_id=$1`, [storeId]);
       await client.query("DELETE FROM zoho_oauth_states WHERE store_id=$1", [storeId]);
-      await client.query("DELETE FROM webhook_events WHERE store_id=$1 AND id<>$2", [storeId, row.id]);
+      await client.query("DELETE FROM webhook_events WHERE store_id=$1", [storeId]);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -75,7 +75,7 @@ async function processEvent(row: EventRow): Promise<void> {
     }
     return;
   }
-  if (event === "customer/redact") {
+  if (event === "customers/redact") {
     const customer = payload.customer as Record<string, unknown>;
     const customerId = Number(customer.id);
     const ids = Array.isArray(payload.orders_to_redact)

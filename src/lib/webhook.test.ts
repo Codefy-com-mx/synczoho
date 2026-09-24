@@ -38,7 +38,10 @@ describe("Tiendanube webhook receiver", () => {
   it("accepts store redact only on its dedicated URL with the expected payload", async () => {
     expect((await handler(request("privacy-store-redact", { store_id: 123 }))).status).toBe(200);
     expect((await handler(request("privacy-store-redact", {
-      store_id: 123, event: "app/store_redact",
+      store_id: 123, event: "store/redact",
+    }))).status).toBe(200);
+    expect((await handler(request("privacy-customer-redact", {
+      store_id: 123, event: "customers/redact", customer: { id: 456 }, orders_to_redact: [],
     }))).status).toBe(200);
     expect((await handler(request("privacy-store-redact", {
       store_id: 123, event: "order/paid", id: 45,

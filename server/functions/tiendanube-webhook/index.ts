@@ -4,8 +4,8 @@ import { getPool } from "../../db.js";
 import { corsHeaders } from "../_shared/zoho.js";
 
 const privacyEvents: Record<string, string> = {
-  "privacy-store-redact": "app/store_redact",
-  "privacy-customer-redact": "customer/redact",
+  "privacy-store-redact": "store/redact",
+  "privacy-customer-redact": "customers/redact",
   "privacy-data-request": "customers/data_request",
 };
 
@@ -36,7 +36,7 @@ export default serve(async (req) => {
       (event.startsWith("order/") && !Number.isSafeInteger(Number(payload.id)))) {
     return new Response(JSON.stringify({ error: "Invalid event" }), { status: 400 });
   }
-  if (event === "customer/redact" || event === "customers/data_request") {
+  if (event === "customers/redact" || event === "customers/data_request") {
     const customer = payload.customer;
     if (!customer || typeof customer !== "object" ||
         !Number.isSafeInteger(Number((customer as Record<string, unknown>).id))) {
