@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   events: [] as string[],
   fetchCalls: [] as Array<{ path: string; method: string }>,
   logCalls: [] as any[],
+  stockPriceBodies: [] as any[],
 }));
 
 vi.mock("../../server/db.js", () => ({
@@ -57,6 +58,7 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
     }
     if (path === "/products/stock-price") {
       h.events.push("tn:stock-price");
+      h.stockPriceBodies.push(JSON.parse(String(init?.body)));
       if (h.stockPriceStatus !== 200) {
         return new Response("chunk failed", { status: h.stockPriceStatus });
       }
@@ -141,6 +143,7 @@ beforeEach(() => {
   h.events = [];
   h.fetchCalls = [];
   h.logCalls = [];
+  h.stockPriceBodies = [];
 });
 
 describe("sync-prices-run single flight", () => {
@@ -220,5 +223,17 @@ describe("sync-prices-run single flight", () => {
     expect(pool.connectCount).toBe(0);
     expect(h.events).toEqual(["zoho:items", "tn:products"]);
     expect(h.logCalls).toHaveLength(0);
+  });
+});
+
+describe("sync-prices-run batching", () => {
+  it("sends at most 50 variants per stock-price request", async () => {
+    h.zohoItems = Array.from({ length: 60 }, (_, i) => ({ item_id: `z-${i}`, sku: `SKU-${i}`, rate: 15, sales_rate: null }));
+    h.tnProducts = [{ id: 10, variants: Array.from({ length: 60 }, (_, i) => ({ id: 100 + i, sku: `SKU-${i}`, price: 10, promotional_price: null })) }];
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ updated: 60, errors: 0 });
+    expect(h.stockPriceBodies.map((body) => body.flatMap((p: any) => p.variants).length)).toEqual([50, 10]);
   });
 });

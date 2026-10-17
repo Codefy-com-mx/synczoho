@@ -1,6 +1,7 @@
 import { serve } from "../../runtime.js";
-import { corsHeaders, getAdminClient } from "../_shared/zoho.js";
+import { corsHeaders, getAdminClient, logSync } from "../_shared/zoho.js";
 import { TN_USER_AGENT } from "../_shared/tiendanube.js";
+import { syncStoreWebhooks } from "../_shared/webhooks.js";
 
 export default serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -110,6 +111,31 @@ export default serve(async (req) => {
 
       if (insertError) throw insertError;
       console.log('Store inserted');
+    }
+
+    // Los webhooks quedan activos desde la instalación (pedidos y
+    // app/uninstalled). Un fallo no bloquea la instalación: el comerciante
+    // puede reintentarlo desde Pedidos.
+    const appUrl = process.env.APP_URL?.replace(/\/$/, "");
+    if (appUrl) {
+      const store = { store_id: storeId.toString(), access_token: tokenData.access_token, store_name: storeName };
+      try {
+        const { created, deleted, errors } = await syncStoreWebhooks(store, appUrl);
+        if (errors.length) {
+          await logSync(database, store.store_id, {
+            operation: "webhooks_register",
+            status: "error",
+            message: `Webhooks con error al instalar: ${errors.map((e) => e.event).join(", ")}`,
+            payload: { created, deleted, errors },
+          });
+        }
+      } catch (error) {
+        await logSync(database, store.store_id, {
+          operation: "webhooks_register",
+          status: "error",
+          message: error instanceof Error ? error.message : "Error al registrar webhooks",
+        });
+      }
     }
 
     return new Response(

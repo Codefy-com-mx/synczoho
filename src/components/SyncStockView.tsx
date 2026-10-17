@@ -12,6 +12,15 @@ import { toast } from 'sonner';
 
 interface Props { storeId: string }
 
+type Schedule = 'disabled' | 'hourly' | 'every6h' | 'daily';
+
+const scheduleOptions: Array<{ value: Schedule; label: string }> = [
+  { value: 'disabled', label: 'Desactivada (solo manual)' },
+  { value: 'hourly', label: 'Cada hora' },
+  { value: 'every6h', label: 'Cada 6 horas' },
+  { value: 'daily', label: 'Una vez al día' },
+];
+
 interface PreviewItem {
   sku: string;
   from: number;
@@ -23,6 +32,7 @@ interface PreviewItem {
 export function SyncStockView({ storeId }: Props) {
   const { settings, saving, save } = useSyncSettings(storeId);
   const [running, setRunning] = useState(false);
+  const [runningPrices, setRunningPrices] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
@@ -81,6 +91,24 @@ export function SyncStockView({ storeId }: Props) {
     }
   };
 
+  const runPrices = async () => {
+    setRunningPrices(true);
+    try {
+      const { data, error } = await api.functions.invoke('sync-prices-run', { body: { storeId } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      if (data?.skipped) {
+        toast.info('Ya hay una sincronización de precios en curso. Espera a que termine e inténtalo de nuevo.');
+        return;
+      }
+      toast.success(`Precios sincronizados: ${data.updated} actualizados, ${data.errors} errores`);
+    } catch (e: any) {
+      toast.error(e?.message || 'Error en la sincronización de precios');
+    } finally {
+      setRunningPrices(false);
+    }
+  };
+
   if (!settings) {
     return <Box display="flex" justifyContent="center" padding="6"><Spinner /></Box>;
   }
@@ -100,7 +128,7 @@ export function SyncStockView({ storeId }: Props) {
                 checked={settings.stock_enabled}
                 onChange={(e) => save({ stock_enabled: e.target.checked })}
               />
-              <FieldHelp help="Habilita el motor de sincronización de inventario entre Zoho y Tiendanube. Cuando está activo, podrá ejecutar sincronizaciones manuales y, próximamente, automáticas. Si lo desactiva, ningún cambio de stock será replicado entre las plataformas." />
+              <FieldHelp help="Habilita el motor de sincronización de inventario entre Zoho y Tiendanube. Cuando está activo, podrá ejecutar sincronizaciones manuales y programar sincronizaciones automáticas. Si lo desactiva, ningún cambio de stock será replicado entre las plataformas." />
             </Box>
 
             <Box>
@@ -140,7 +168,68 @@ export function SyncStockView({ storeId }: Props) {
               </Box>
             )}
 
+            <Box>
+              <Box display="flex" alignItems="center" gap="2">
+                <Text fontWeight="medium">Sincronización automática</Text>
+                <FieldHelp help="Ejecuta la sincronización de stock sola, con la frecuencia elegida. Solo se modifican las variantes cuyo stock cambió." />
+              </Box>
+              <Select
+                id="stock_schedule"
+                name="stock_schedule"
+                aria-label="Sincronización automática de stock"
+                value={settings.stock_schedule}
+                onChange={(e) => save({ stock_schedule: e.target.value as Schedule })}
+                disabled={!settings.stock_enabled}
+              >
+                {scheduleOptions.map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
+              </Select>
+            </Box>
+
             {saving && <Text fontSize="caption" color="neutral-textLow">Guardando…</Text>}
+          </Box>
+        </Card.Body>
+      </Card>
+
+      <Card>
+        <Card.Header>
+          <Box display="flex" justifyContent="space-between" alignItems="center" width="100%">
+            <Title as="h4" fontSize="h5">Precios</Title>
+            <ProgressButton
+              onClick={runPrices}
+              loading={runningPrices}
+              progress={null}
+              disabled={!settings.prices_enabled}
+              icon={<RedoIcon />}
+              loadingLabel="Sincronizando"
+            >
+              Sincronizar precios
+            </ProgressButton>
+          </Box>
+        </Card.Header>
+        <Card.Body>
+          <Box display="flex" flexDirection="column" gap="3">
+            <Box display="flex" alignItems="center" gap="2">
+              <Checkbox
+                name="prices_enabled"
+                label="Actualizar precios desde Zoho"
+                checked={settings.prices_enabled}
+                onChange={(e) => save({ prices_enabled: e.target.checked })}
+              />
+              <FieldHelp help="Copia el precio de venta de Zoho a Tiendanube por SKU. Si el ítem de Zoho tiene un precio de venta (sales rate) distinto de su tarifa, ese valor se publica como precio promocional; si no, se quita el precio promocional de Tiendanube." />
+            </Box>
+            <Box>
+              <Text fontWeight="medium">Sincronización automática</Text>
+              <Select
+                id="prices_schedule"
+                name="prices_schedule"
+                aria-label="Sincronización automática de precios"
+                value={settings.prices_schedule}
+                onChange={(e) => save({ prices_schedule: e.target.value as Schedule })}
+                disabled={!settings.prices_enabled}
+              >
+                {scheduleOptions.map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
+              </Select>
+            </Box>
           </Box>
         </Card.Body>
       </Card>

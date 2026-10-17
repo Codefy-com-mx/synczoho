@@ -11,6 +11,7 @@ import {
   logSync,
 } from "../_shared/zoho.js";
 import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
+import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
 const EPSILON = 0.01; // diferencia mínima para considerar que el precio cambió
 
@@ -193,13 +194,13 @@ export default serve(async (req) => {
     }
 
     const products = [...byProduct.entries()].map(([id, variants]) => ({ id, variants }));
-    const CHUNK = 100;
     let updated = 0;
     let errors = 0;
     const details: any[] = [];
 
-    for (let i = 0; i < products.length; i += CHUNK) {
-      const chunk = products.slice(i, i + CHUNK);
+    for (const chunk of chunkStockPriceBatch(products)) {
+      const sent = new Set(chunk.flatMap((prod) => prod.variants.map((v) => v.id)));
+      const pairsInChunk = toUpdate.filter((p) => sent.has(p.tn_variant_id));
       const r = await tnFetchWithRetry(store, "/products/stock-price", {
         method: "PATCH",
         body: JSON.stringify(chunk),
@@ -207,27 +208,21 @@ export default serve(async (req) => {
 
       if (!r.ok) {
         const errText = await r.text();
-        for (const prod of chunk) {
-          const pairsInChunk = toUpdate.filter((p) => p.tn_product_id === prod.id);
-          for (const p of pairsInChunk) {
-            errors++;
-            details.push({ sku: p.sku, error: `TN PATCH ${r.status}: ${errText.slice(0, 100)}` });
-          }
+        for (const p of pairsInChunk) {
+          errors++;
+          details.push({ sku: p.sku, error: `TN PATCH ${r.status}: ${errText.slice(0, 100)}` });
         }
       } else {
         await r.text().catch(() => "");
-        for (const prod of chunk) {
-          const pairsInChunk = toUpdate.filter((p) => p.tn_product_id === prod.id);
-          for (const p of pairsInChunk) {
-            updated++;
-            details.push({
-              sku: p.sku,
-              old_price: p.tn_price,
-              new_price: p.zoho_price,
-              old_promo: p.tn_promo,
-              new_promo: p.zoho_promo,
-            });
-          }
+        for (const p of pairsInChunk) {
+          updated++;
+          details.push({
+            sku: p.sku,
+            old_price: p.tn_price,
+            new_price: p.zoho_price,
+            old_promo: p.tn_promo,
+            new_promo: p.zoho_promo,
+          });
         }
       }
     }

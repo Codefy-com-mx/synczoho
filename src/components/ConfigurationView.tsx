@@ -119,7 +119,7 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
                   checked={settings.alert_on_error}
                   onChange={(e) => save({ alert_on_error: e.target.checked })}
                 />
-                <FieldHelp help="Cuando el scheduler automático (stock o precios) detecta errores, te envía un email con el detalle. Requiere configurar un email de destino y la variable RESEND_API_KEY en Coolify." />
+                <FieldHelp help="Cuando una sincronización automática de stock o precios termina con errores, te enviamos un email con el detalle al email de destino." />
               </Box>
 
               {settings.alert_on_error && (
@@ -151,19 +151,6 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
                       Email actual: <strong>{settings.alert_email}</strong>
                     </Text>
                   )}
-                  <Box
-                    backgroundColor="neutral-surface"
-                    padding="3"
-                    borderRadius="2"
-                  >
-                    <Text fontSize="caption" color="neutral-textLow">
-                      Para que el envío funcione, el secreto <strong>RESEND_API_KEY</strong> debe estar
-                      configurado entre las variables de entorno de la aplicación en{' '}
-                      <strong>Coolify</strong>.
-                      Creá una cuenta gratuita en{' '}
-                      <strong>resend.com</strong> para obtener tu API key.
-                    </Text>
-                  </Box>
                 </Box>
               )}
 

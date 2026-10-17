@@ -22,12 +22,17 @@ const settings = {
   stock_enabled: true,
   stock_direction: 'zoho_to_tn',
   stock_priority: 'zoho',
+  stock_schedule: 'disabled',
+  prices_enabled: false,
+  prices_schedule: 'disabled',
 };
 
-function mockInvoke(runResponse: unknown): void {
-  invoke.mockImplementation(async (name: string) => {
-    if (name === 'sync-settings') return { data: { settings }, error: null };
-    if (name === 'sync-stock-run') return { data: runResponse, error: null };
+function mockInvoke(runResponse: unknown, current: Record<string, unknown> = settings): void {
+  invoke.mockImplementation(async (name: string, { body }: any) => {
+    if (name === 'sync-settings') {
+      return { data: { settings: body.action === 'save' ? body.settings : current }, error: null };
+    }
+    if (name === 'sync-stock-run' || name === 'sync-prices-run') return { data: runResponse, error: null };
     throw new Error(`Unexpected function: ${name}`);
   });
 }
@@ -81,5 +86,53 @@ describe('SyncStockView manual run', () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
     expect(toastInfo).not.toHaveBeenCalled();
     expect(container.textContent).toContain('Actualizados: 2');
+  });
+});
+
+describe('SyncStockView automatic sync and prices', () => {
+  const savedSettings = () => invoke.mock.calls
+    .filter(([name, { body }]) => name === 'sync-settings' && body.action === 'save')
+    .map(([, { body }]) => body.settings);
+
+  it('lets the merchant schedule the stock sync', async () => {
+    mockInvoke({});
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+
+    const schedule = await screen.findByLabelText('Sincronización automática de stock');
+    await act(async () => {
+      fireEvent.change(schedule, { target: { value: 'every6h' } });
+    });
+
+    expect(savedSettings().at(-1)).toMatchObject({ stock_schedule: 'every6h' });
+  });
+
+  it('lets the merchant turn on and schedule the price sync', async () => {
+    mockInvoke({});
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(await screen.findByLabelText('Actualizar precios desde Zoho'));
+    });
+    expect(savedSettings().at(-1)).toMatchObject({ prices_enabled: true });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Sincronización automática de precios'), { target: { value: 'daily' } });
+    });
+    expect(savedSettings().at(-1)).toMatchObject({ prices_enabled: true, prices_schedule: 'daily' });
+  });
+
+  it('runs the price sync on demand when prices are enabled', async () => {
+    mockInvoke({ dry_run: false, total: 2, updated: 1, in_sync: 1, errors: 0 }, { ...settings, prices_enabled: true });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /Sincronizar precios/ }));
+    });
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('sync-prices-run', { body: { storeId: 'store-1' } }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining('1 actualizados')));
   });
 });

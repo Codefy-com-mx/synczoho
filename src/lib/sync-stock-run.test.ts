@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   fetchCalls: [] as Array<{ path: string; method: string }>,
   logCalls: [] as any[],
   upsertCalls: [] as Array<{ table: string; values: any }>,
+  stockPriceBodies: [] as any[],
 }));
 
 vi.mock("../../server/db.js", () => ({
@@ -74,6 +75,7 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
     }
     if (path === "/products/stock-price") {
       h.events.push("tn:stock-price");
+      h.stockPriceBodies.push(JSON.parse(String(init?.body)));
       if (h.stockPriceStatus !== 200) {
         return new Response("chunk failed", { status: h.stockPriceStatus });
       }
@@ -162,6 +164,7 @@ beforeEach(() => {
   h.fetchCalls = [];
   h.logCalls = [];
   h.upsertCalls = [];
+  h.stockPriceBodies = [];
 });
 
 describe("sync-stock-run single flight", () => {
@@ -174,7 +177,6 @@ describe("sync-stock-run single flight", () => {
       "lock:try",
       "zoho:items",
       "tn:products",
-      "tn:variant",
       "tn:stock-price",
       "lock:release",
     ]);
@@ -255,5 +257,23 @@ describe("sync-stock-run single flight", () => {
     expect(pool.connectCount).toBe(0);
     expect(h.lockPoolRequests).toBe(0);
     expect(h.events).toHaveLength(0);
+  });
+});
+
+describe("sync-stock-run Tiendanube writes", () => {
+  it("never writes variants one by one: Tiendanube manages stock_management itself", async () => {
+    await runHandler();
+
+    expect(h.fetchCalls.filter((call) => call.method === "PUT")).toHaveLength(0);
+  });
+
+  it("sends at most 50 variants per stock-price request", async () => {
+    h.zohoItems = Array.from({ length: 60 }, (_, i) => ({ item_id: `z-${i}`, sku: `SKU-${i}`, stock_on_hand: 5 }));
+    h.tnProducts = [{ id: 10, variants: Array.from({ length: 60 }, (_, i) => ({ id: 100 + i, sku: `SKU-${i}`, stock: 3 })) }];
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ updated: 60, errors: 0 });
+    expect(h.stockPriceBodies.map((body) => body.flatMap((p: any) => p.variants).length)).toEqual([50, 10]);
   });
 });

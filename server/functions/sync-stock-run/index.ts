@@ -5,7 +5,7 @@ import { acquireSyncLock, type SyncLockHandle } from "../../sync-lock.js";
 // Modo on-demand: corre un sync completo (Zoho → TN, TN → Zoho o bidireccional).
 // Vincula automáticamente productos por SKU si aún no están mapeados.
 // Mejoras v2:
-//   - TN updates vía PATCH /products/stock-price (batch, hasta 100 productos por chunk)
+//   - TN updates vía PATCH /products/stock-price (batch, hasta 50 variantes por request)
 //   - inventory_levels con location_id (recomendación de certificación TN)
 //   - Retry automático en 429 vía tnFetchWithRetry
 //   - dryRun: simula sin aplicar cambios
@@ -21,6 +21,7 @@ import {
   tnFetchWithRetry,
   getTnDefaultLocationId,
 } from "../_shared/tiendanube.js";
+import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
 interface PairItem {
   zoho_item_id: string;
@@ -197,20 +198,8 @@ export default serve(async (req) => {
       // Obtener location_id del primer depósito activo
       const locationId = await getTnDefaultLocationId(store);
 
-      // Primero, habilitar stock_management en variantes que no lo tengan
-      // (PATCH /products/stock-price no expone este flag; lo seteamos vía PUT)
-      for (const p of tnPairs) {
-        const r = await tnFetchWithRetry(store, `/products/${p.tn_product_id}/variants/${p.tn_variant_id}`, {
-          method: "PUT",
-          body: JSON.stringify({ stock_management: true }),
-        });
-        // 422 = ya estaba habilitado — ignorar
-        if (!r.ok && r.status !== 422) {
-          await r.text(); // consumir body
-        } else {
-          await r.text().catch(() => "");
-        }
-      }
+      // stock_management lo calcula Tiendanube: enviar un stock numérico lo
+      // activa, así que no hace falta (ni se puede) escribirlo por API.
 
       // Agrupar por product_id
       const byProduct = new Map<number, Array<{ id: number; inventory_levels: Array<{ location_id: number | null; stock: number }> }>>();
@@ -222,12 +211,11 @@ export default serve(async (req) => {
         });
       }
 
-      // Enviar en chunks de hasta 100 productos por request
-      const CHUNK = 100;
       const products = [...byProduct.entries()].map(([id, variants]) => ({ id, variants }));
 
-      for (let i = 0; i < products.length; i += CHUNK) {
-        const chunk = products.slice(i, i + CHUNK);
+      for (const chunk of chunkStockPriceBatch(products)) {
+        const sent = new Set(chunk.flatMap((prod) => prod.variants.map((v) => v.id)));
+        const chunkPairs = tnPairs.filter((p) => sent.has(p.tn_variant_id));
         const r = await tnFetchWithRetry(store, "/products/stock-price", {
           method: "PATCH",
           body: JSON.stringify(chunk),
@@ -236,36 +224,30 @@ export default serve(async (req) => {
         if (!r.ok) {
           const errText = await r.text();
           // Marcar todas las variantes de este chunk como error
-          for (const prod of chunk) {
-            const chunkPairs = tnPairs.filter((p) => p.tn_product_id === prod.id);
-            for (const p of chunkPairs) {
-              errors++;
-              details.push({ sku: p.zoho_sku, error: `TN batch PATCH ${r.status}: ${errText.slice(0, 120)}` });
-            }
+          for (const p of chunkPairs) {
+            errors++;
+            details.push({ sku: p.zoho_sku, error: `TN batch PATCH ${r.status}: ${errText.slice(0, 120)}` });
           }
         } else {
           await r.text().catch(() => "");
           // Éxito — registrar y actualizar stock_sync_state
-          for (const prod of chunk) {
-            const chunkPairs = tnPairs.filter((p) => p.tn_product_id === prod.id);
-            for (const p of chunkPairs) {
-              updated++;
-              details.push({ sku: p.zoho_sku, from: p.tn_qty, to: p.zoho_qty, target: "tn" });
-              await admin.from("stock_sync_state").upsert(
-                {
-                  store_id: storeId,
-                  sku: p.zoho_sku || p.zoho_item_id,
-                  zoho_item_id: p.zoho_item_id,
-                  tiendanube_product_id: p.tn_product_id,
-                  tiendanube_variant_id: p.tn_variant_id,
-                  last_qty: p.zoho_qty,
-                  last_source: "zoho",
-                  last_synced_at: new Date().toISOString(),
-                  last_error: null,
-                },
-                { onConflict: "store_id,sku" },
-              );
-            }
+          for (const p of chunkPairs) {
+            updated++;
+            details.push({ sku: p.zoho_sku, from: p.tn_qty, to: p.zoho_qty, target: "tn" });
+            await admin.from("stock_sync_state").upsert(
+              {
+                store_id: storeId,
+                sku: p.zoho_sku || p.zoho_item_id,
+                zoho_item_id: p.zoho_item_id,
+                tiendanube_product_id: p.tn_product_id,
+                tiendanube_variant_id: p.tn_variant_id,
+                last_qty: p.zoho_qty,
+                last_source: "zoho",
+                last_synced_at: new Date().toISOString(),
+                last_error: null,
+              },
+              { onConflict: "store_id,sku" },
+            );
           }
         }
       }
