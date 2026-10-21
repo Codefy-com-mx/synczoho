@@ -6,7 +6,9 @@ import { acquireSyncLock, type SyncLockHandle } from "../../sync-lock.js";
 // Vincula automáticamente productos por SKU si aún no están mapeados.
 // Mejoras v2:
 //   - TN updates vía PATCH /products/stock-price (batch, hasta 50 variantes por request)
-//   - inventory_levels con location_id (recomendación de certificación TN)
+//   - inventory_levels por location mapeada (location_id explícito); sin mapeos
+//     y con una sola location (o sin scope read_locations) se omite location_id
+//   - Variantes desde la caché local tn_variants (sin polling a /products)
 //   - Retry automático en 429 vía tnFetchWithRetry
 //   - dryRun: simula sin aplicar cambios
 import {
@@ -16,34 +18,14 @@ import {
   zohoFetch,
   logSync,
 } from "../_shared/zoho.js";
-import {
-  getStore,
-  tnFetchWithRetry,
-  getTnDefaultLocationId,
-} from "../_shared/tiendanube.js";
+import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
+import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
+import { fetchTnLocations, loadLocationMappings } from "../_shared/locations.js";
+import { buildStockPatch, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
+import { logRetryObserver } from "../_shared/tn-observer.js";
 
-interface PairItem {
-  zoho_item_id: string;
-  zoho_sku: string;
-  zoho_qty: number;
-  tn_product_id: number;
-  tn_variant_id: number;
-  tn_qty: number;
-}
-
-type SyncTarget = "tn" | "zoho" | null;
-
-function getTarget(
-  p: PairItem,
-  direction: string,
-  priority: string,
-): SyncTarget {
-  if (p.zoho_qty === p.tn_qty) return null;
-  if (direction === "zoho_to_tn") return "tn";
-  if (direction === "tn_to_zoho") return "zoho";
-  return priority === "zoho" ? "tn" : "zoho";
-}
+const ZOHO_DETAIL_CONCURRENCY = 3;
 
 export default serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -70,6 +52,11 @@ export default serve(async (req) => {
       return json({ error: "Sincronización de stock deshabilitada" }, 400);
     }
 
+    // Sin catálogo local todavía no hay contra qué comparar: neutro, sin tocar Zoho ni Tiendanube.
+    if ((await getCatalogStatus(storeId)) === "pending") {
+      return json({ skipped: true, reason: "catalog_not_ready" });
+    }
+
     // A real run takes the per-(store, operation) session advisory lock before
     // any Zoho/Tiendanube call or write. The lock comes from the dedicated
     // lock pool so it cannot starve handler queries. Contention returns a
@@ -88,12 +75,10 @@ export default serve(async (req) => {
 
     const conn = await getZohoConnection(admin, storeId);
     const store = await getStore(admin, storeId);
+    const observer = logRetryObserver(admin, storeId);
 
     // 1) Cargar TODOS los items de Zoho (con stock + sku)
-    const zohoItems: {
-      item_id: string; sku?: string; name?: string;
-      stock_on_hand?: number; actual_available_stock?: number;
-    }[] = [];
+    const zohoItems: ZohoStockItem[] = [];
     let page = 1;
     while (true) {
       const r = await zohoFetch(admin, conn, `/inventory/v1/items?per_page=200&page=${page}`);
@@ -106,82 +91,84 @@ export default serve(async (req) => {
       if (page > 50) break;
     }
 
-    // 2) Cargar productos de Tiendanube (con variantes/sku/stock)
-    const tnProducts: any[] = [];
-    let tnPage = 1;
-    while (true) {
-      const resp = await tnFetchWithRetry(store, `/products?per_page=200&page=${tnPage}&fields=id,variants`);
-      if (!resp.ok) { await resp.text(); throw new Error(`Tiendanube products ${resp.status}`); }
-      const arr = await resp.json();
-      tnProducts.push(...arr);
-      if (!arr || arr.length < 200) break;
-      tnPage++;
-      if (tnPage > 50) break;
-    }
+    // 2) Variantes de Tiendanube desde la caché local, mapeos y cantidad de locations
+    const catalog = await loadCatalog(storeId);
+    const mappings = await loadLocationMappings(storeId);
+    const tnLocationCount = (await fetchTnLocations(store))?.length ?? null;
 
-    // 3) Construir mapa por SKU (case-insensitive, trim)
-    const norm = (s: any) => (s ?? "").toString().trim().toUpperCase();
-    const tnBySku = new Map<string, { product_id: number; variant_id: number; stock: number }>();
-    for (const p of tnProducts) {
-      for (const v of p.variants || []) {
-        const sku = norm(v.sku);
-        if (!sku) continue;
-        if (!tnBySku.has(sku)) {
-          tnBySku.set(sku, { product_id: p.id, variant_id: v.id, stock: Number(v.stock ?? 0) });
+    // 3) Si la lista de Zoho no trae stock por location, pedir el detalle solo de los ítems con match
+    let errors = 0;
+    const details: any[] = [];
+    const { pairs } = matchBySku(zohoItems, catalog);
+    if (mappings.some((m) => m.zoho_location_id)) {
+      const queue = pairs.map((p) => p.item).filter((it) => !Array.isArray(it.locations));
+      await Promise.all(Array.from({ length: ZOHO_DETAIL_CONCURRENCY }, async () => {
+        for (let it = queue.shift(); it; it = queue.shift()) {
+          const r = await zohoFetch(admin!, conn, `/inventory/v1/items/${it.item_id}`);
+          const j = await r.json().catch(() => ({}));
+          if (r.ok && Array.isArray(j.item?.locations)) {
+            it.locations = j.item.locations;
+          } else {
+            // Sin locations el planificador no toca el ítem; se informa como error.
+            errors++;
+            details.push({ sku: it.sku || it.item_id, error: `Zoho item ${r.status}: sin stock por location` });
+          }
         }
-      }
+      }));
     }
 
-    // 4) Cruzar por SKU
-    const pairs: PairItem[] = [];
-    const unmatched: string[] = [];
-    for (const it of zohoItems) {
-      const sku = norm(it.sku);
-      if (!sku) continue;
-      const match = tnBySku.get(sku);
-      if (!match) { unmatched.push(it.sku || it.item_id); continue; }
-      pairs.push({
-        zoho_item_id: it.item_id,
-        zoho_sku: it.sku || "",
-        zoho_qty: Number(it.stock_on_hand ?? it.actual_available_stock ?? 0),
-        tn_product_id: match.product_id,
-        tn_variant_id: match.variant_id,
-        tn_qty: match.stock,
-      });
-    }
-
-    // 5) Clasificar targets
-    const tnPairs = pairs.filter((p) => getTarget(p, direction, priority) === "tn");
-    const zohoPairs = pairs.filter((p) => getTarget(p, direction, priority) === "zoho");
-    const inSyncPairs = pairs.filter((p) => getTarget(p, direction, priority) === null);
+    // 4) Planificar cambios por (variante, location)
+    const plan = planStockChanges({ zohoItems, catalog, mappings, tnLocationCount, direction, priority });
+    const { unmatched, inSync, blocked } = plan;
+    const tnChanges = plan.changes.filter((c) => c.target === "tn");
+    const zohoChanges = plan.changes.filter((c) => c.target === "zoho");
+    const total = plan.changes.length + inSync;
+    const detailOf = (c: StockChange) => ({
+      sku: c.sku, from: c.from, to: c.to, target: c.target,
+      location_id: c.target === "tn" ? c.tn_location_id : c.zoho_location_id,
+    });
 
     // ── DRY RUN ──────────────────────────────────────────────────────────────
     if (dryRun) {
       return json({
         dry_run: true,
-        total: pairs.length,
-        updated: tnPairs.length + zohoPairs.length,
-        inSync: inSyncPairs.length,
-        errors: 0,
+        blocked,
+        total,
+        updated: plan.changes.length,
+        inSync,
+        errors,
         unmatched: unmatched.length,
         unmatched_sample: unmatched.slice(0, 20),
-        details: [
-          ...tnPairs.map((p) => ({ sku: p.zoho_sku, from: p.tn_qty, to: p.zoho_qty, target: "tn", dry_run: true })),
-          ...zohoPairs.map((p) => ({ sku: p.zoho_sku, from: p.zoho_qty, to: p.tn_qty, target: "zoho", dry_run: true })),
-        ].slice(0, 100),
+        details: [...details, ...plan.changes.map((c) => ({ ...detailOf(c), dry_run: true }))].slice(0, 100),
       });
     }
 
     // ── MODO REAL ─────────────────────────────────────────────────────────────
 
-    // 6) Auto-vincular en product_sync_map
-    for (const p of pairs) {
+    if (blocked) {
+      // Visible en los logs del comerciante; errors queda en 0 para el scheduler (no es un fallo de ejecución).
+      await logSync(admin, storeId, {
+        operation: "stock_sync_run",
+        status: "error",
+        message: `Stock no sincronizado: la tienda tiene ${tnLocationCount} locations en Tiendanube y ninguna está vinculada a un almacén de Zoho. Vinculalas en Configuración.`,
+        duration_ms: Date.now() - t0,
+        payload: { blocked, tn_locations: tnLocationCount },
+      });
+      terminalLogged = true;
+      return json({
+        dry_run: false, blocked, total: 0, updated: 0, inSync: 0, errors: 0,
+        unmatched: unmatched.length, unmatched_sample: unmatched.slice(0, 20), details: [],
+      });
+    }
+
+    // 5) Auto-vincular en product_sync_map
+    for (const { item, variant } of pairs) {
       await admin.from("product_sync_map").upsert(
         {
           store_id: storeId,
-          zoho_item_id: p.zoho_item_id,
-          zoho_sku: p.zoho_sku,
-          tiendanube_product_id: p.tn_product_id,
+          zoho_item_id: item.item_id,
+          zoho_sku: item.sku || "",
+          tiendanube_product_id: variant.product_id,
           status: "linked",
           last_synced_at: new Date().toISOString(),
         },
@@ -190,71 +177,56 @@ export default serve(async (req) => {
     }
 
     let updated = 0;
-    let errors = 0;
-    const details: any[] = [];
+    // stock_sync_state tiene una fila por SKU: con varias locations se guarda el primer cambio aplicado.
+    const stateWritten = new Set<string>();
+    const saveState = async (c: StockChange) => {
+      if (stateWritten.has(c.sku)) return;
+      stateWritten.add(c.sku);
+      await admin!.from("stock_sync_state").upsert(
+        {
+          store_id: storeId,
+          sku: c.sku,
+          zoho_item_id: c.zoho_item_id,
+          tiendanube_product_id: c.product_id,
+          tiendanube_variant_id: c.variant_id,
+          last_qty: c.to,
+          last_source: c.target === "tn" ? "zoho" : "tiendanube",
+          last_synced_at: new Date().toISOString(),
+          last_error: null,
+        },
+        { onConflict: "store_id,sku" },
+      );
+    };
 
-    // 7a) TN updates — batch via PATCH /products/stock-price ──────────────────
-    if (tnPairs.length > 0) {
-      // Obtener location_id del primer depósito activo
-      const locationId = await getTnDefaultLocationId(store);
+    // 6a) TN updates — batch via PATCH /products/stock-price ──────────────────
+    // stock_management lo calcula Tiendanube: enviar un stock numérico lo activa.
+    for (const chunk of chunkStockPriceBatch(buildStockPatch(tnChanges))) {
+      const sent = new Set(chunk.flatMap((prod) => prod.variants.map((v) => v.id)));
+      const chunkChanges = tnChanges.filter((c) => sent.has(c.variant_id));
+      const r = await tnFetchWithRetry(store, "/products/stock-price", {
+        method: "PATCH",
+        body: JSON.stringify(chunk),
+      }, undefined, observer);
 
-      // stock_management lo calcula Tiendanube: enviar un stock numérico lo
-      // activa, así que no hace falta (ni se puede) escribirlo por API.
-
-      // Agrupar por product_id
-      const byProduct = new Map<number, Array<{ id: number; inventory_levels: Array<{ location_id: number | null; stock: number }> }>>();
-      for (const p of tnPairs) {
-        if (!byProduct.has(p.tn_product_id)) byProduct.set(p.tn_product_id, []);
-        byProduct.get(p.tn_product_id)!.push({
-          id: p.tn_variant_id,
-          inventory_levels: [{ location_id: locationId, stock: p.zoho_qty }],
-        });
-      }
-
-      const products = [...byProduct.entries()].map(([id, variants]) => ({ id, variants }));
-
-      for (const chunk of chunkStockPriceBatch(products)) {
-        const sent = new Set(chunk.flatMap((prod) => prod.variants.map((v) => v.id)));
-        const chunkPairs = tnPairs.filter((p) => sent.has(p.tn_variant_id));
-        const r = await tnFetchWithRetry(store, "/products/stock-price", {
-          method: "PATCH",
-          body: JSON.stringify(chunk),
-        });
-
-        if (!r.ok) {
-          const errText = await r.text();
-          // Marcar todas las variantes de este chunk como error
-          for (const p of chunkPairs) {
-            errors++;
-            details.push({ sku: p.zoho_sku, error: `TN batch PATCH ${r.status}: ${errText.slice(0, 120)}` });
-          }
-        } else {
-          await r.text().catch(() => "");
-          // Éxito — registrar y actualizar stock_sync_state
-          for (const p of chunkPairs) {
-            updated++;
-            details.push({ sku: p.zoho_sku, from: p.tn_qty, to: p.zoho_qty, target: "tn" });
-            await admin.from("stock_sync_state").upsert(
-              {
-                store_id: storeId,
-                sku: p.zoho_sku || p.zoho_item_id,
-                zoho_item_id: p.zoho_item_id,
-                tiendanube_product_id: p.tn_product_id,
-                tiendanube_variant_id: p.tn_variant_id,
-                last_qty: p.zoho_qty,
-                last_source: "zoho",
-                last_synced_at: new Date().toISOString(),
-                last_error: null,
-              },
-              { onConflict: "store_id,sku" },
-            );
-          }
+      if (!r.ok) {
+        const errText = await r.text();
+        for (const c of chunkChanges) {
+          errors++;
+          details.push({ sku: c.sku, location_id: c.tn_location_id, error: `TN batch PATCH ${r.status}: ${errText.slice(0, 120)}` });
         }
+        continue;
+      }
+      await r.text().catch(() => "");
+      // ponytail: no se actualiza la caché tn_variants tras el PATCH; el webhook product/updated resultante la refresca.
+      for (const c of chunkChanges) {
+        updated++;
+        details.push(detailOf(c));
+        await saveState(c);
       }
     }
 
-    // 7b) Zoho updates — ajustes individuales de inventario ───────────────────
-    for (const p of zohoPairs) {
+    // 6b) Zoho updates — un ajuste de inventario por (ítem, location) ─────────
+    for (const c of zohoChanges) {
       try {
         const adj = await zohoFetch(admin, conn, `/inventory/v1/inventoryadjustments`, {
           method: "POST",
@@ -262,7 +234,11 @@ export default serve(async (req) => {
             date: new Date().toISOString().slice(0, 10),
             reason: "Sync desde Tiendanube",
             adjustment_type: "quantity",
-            line_items: [{ item_id: p.zoho_item_id, quantity_adjusted: p.tn_qty - p.zoho_qty }],
+            line_items: [{
+              item_id: c.zoho_item_id,
+              quantity_adjusted: c.to - c.from,
+              ...(c.zoho_location_id ? { location_id: c.zoho_location_id } : {}),
+            }],
           }),
           headers: { "Content-Type": "application/json" },
         });
@@ -271,42 +247,30 @@ export default serve(async (req) => {
           throw new Error(`Zoho adjust ${adj.status}: ${JSON.stringify(j).slice(0, 200)}`);
         }
         updated++;
-        details.push({ sku: p.zoho_sku, from: p.zoho_qty, to: p.tn_qty, target: "zoho" });
-        await admin.from("stock_sync_state").upsert(
-          {
-            store_id: storeId,
-            sku: p.zoho_sku || p.zoho_item_id,
-            zoho_item_id: p.zoho_item_id,
-            tiendanube_product_id: p.tn_product_id,
-            tiendanube_variant_id: p.tn_variant_id,
-            last_qty: p.tn_qty,
-            last_source: "tiendanube",
-            last_synced_at: new Date().toISOString(),
-            last_error: null,
-          },
-          { onConflict: "store_id,sku" },
-        );
+        details.push(detailOf(c));
+        await saveState(c);
       } catch (err) {
         errors++;
         const msg = err instanceof Error ? err.message : "Error";
-        details.push({ sku: p.zoho_sku, error: msg });
+        details.push({ sku: c.sku, location_id: c.zoho_location_id, error: msg });
       }
     }
 
     await logSync(admin, storeId, {
       operation: "stock_sync_run",
       status: errors === 0 ? "success" : "error",
-      message: `Vinculados: ${pairs.length} · Actualizados: ${updated} · Ya sync: ${inSyncPairs.length} · Errores: ${errors} · Sin match: ${unmatched.length}`,
+      message: `Vinculados: ${pairs.length} · Actualizados: ${updated} · Ya sync: ${inSync} · Errores: ${errors} · Sin match: ${unmatched.length}`,
       duration_ms: Date.now() - t0,
-      payload: { updated, inSync: inSyncPairs.length, errors, total: pairs.length, unmatched: unmatched.slice(0, 50) },
+      payload: { updated, inSync, errors, total, unmatched: unmatched.slice(0, 50) },
     });
     terminalLogged = true;
 
     return json({
       dry_run: false,
-      total: pairs.length,
+      blocked: null,
+      total,
       updated,
-      inSync: inSyncPairs.length,
+      inSync,
       errors,
       unmatched: unmatched.length,
       unmatched_sample: unmatched.slice(0, 20),

@@ -137,23 +137,3 @@ export async function tnFetchJson<T = any>(
   }
   return text ? JSON.parse(text) : ({} as T);
 }
-
-/**
- * Devuelve el location_id principal de la tienda (primer depósito activo).
- * Retorna null si no se puede obtener (ej: el endpoint no existe en el plan).
- */
-export async function getTnDefaultLocationId(
-  store: TiendanubeStore,
-): Promise<number | null> {
-  try {
-    const resp = await tnFetch(store, "/locations");
-    if (!resp.ok) return null;
-    const locs: any[] = await resp.json();
-    if (Array.isArray(locs) && locs.length > 0) {
-      return locs[0].id ?? null;
-    }
-  } catch {
-    // silencioso — algunos planes no tienen este endpoint
-  }
-  return null;
-}

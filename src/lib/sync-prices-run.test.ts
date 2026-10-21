@@ -74,7 +74,6 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
     }
     return new Response("not found", { status: 404 });
   },
-  getTnDefaultLocationId: async () => 1,
 }));
 
 vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({

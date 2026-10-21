@@ -6,7 +6,12 @@ const h = vi.hoisted(() => ({
   lockPoolRequests: 0,
   settings: null as any,
   zohoItems: [] as any[],
-  tnProducts: [] as any[],
+  catalog: [] as any[],
+  catalogStatus: "ready" as string,
+  mappings: [] as any[],
+  tnLocations: null as any,
+  zohoDetails: {} as Record<string, any>,
+  adjustments: [] as any[],
   zohoItemsStatus: 200,
   stockPriceStatus: 200,
   events: [] as string[],
@@ -49,7 +54,17 @@ vi.mock("../../server/functions/_shared/zoho.js", () => ({
     token_expires_at: "2999-01-01T00:00:00.000Z",
     dc: "com",
   }),
-  zohoFetch: async (_admin: any, _conn: any, path: string) => {
+  zohoFetch: async (_admin: any, _conn: any, path: string, init?: RequestInit) => {
+    const detail = path.match(/^\/inventory\/v1\/items\/([^?]+)$/);
+    if (detail) {
+      h.events.push(`zoho:item:${detail[1]}`);
+      return Response.json({ item: h.zohoDetails[detail[1]] });
+    }
+    if (path === "/inventory/v1/inventoryadjustments") {
+      h.events.push("zoho:adjust");
+      h.adjustments.push(JSON.parse(String(init?.body)));
+      return Response.json({ code: 0 });
+    }
     if (path.startsWith("/inventory/v1/items")) {
       h.events.push("zoho:items");
       if (h.zohoItemsStatus !== 200) {
@@ -69,10 +84,7 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
   tnFetchWithRetry: async (_store: any, path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     h.fetchCalls.push({ path, method });
-    if (path.startsWith("/products?")) {
-      h.events.push("tn:products");
-      return Response.json(h.tnProducts);
-    }
+    if (path.startsWith("/products?")) throw new Error(`Unexpected polling: ${path}`);
     if (path === "/products/stock-price") {
       h.events.push("tn:stock-price");
       h.stockPriceBodies.push(JSON.parse(String(init?.body)));
@@ -87,7 +99,22 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
     }
     return new Response("not found", { status: 404 });
   },
-  getTnDefaultLocationId: async () => 1,
+}));
+
+vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
+  getCatalogStatus: async () => h.catalogStatus,
+  loadCatalog: async () => {
+    h.events.push("catalog:load");
+    return h.catalog;
+  },
+}));
+
+vi.mock("../../server/functions/_shared/locations.js", () => ({
+  loadLocationMappings: async () => h.mappings,
+  fetchTnLocations: async () => {
+    h.events.push("tn:locations");
+    return h.tnLocations;
+  },
 }));
 
 import syncStockRun from "../../server/functions/sync-stock-run/index";
@@ -157,7 +184,13 @@ beforeEach(() => {
   h.lockPoolRequests = 0;
   h.settings = { stock_enabled: true, stock_direction: "zoho_to_tn", stock_priority: "zoho" };
   h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5 }];
-  h.tnProducts = [{ id: 10, variants: [{ id: 100, sku: "SKU-1", stock: 3 }] }];
+  h.catalog = [{ product_id: 10, variant_id: 100, sku: "SKU-1", price: 0, promotional_price: null, inventory_levels: [{ location_id: "L1", stock: 3 }] }];
+  h.catalogStatus = "ready";
+  h.mappings = [{ tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: "ZA", zoho_location_name: "Central" }];
+  h.tnLocations = [{ id: "L1", name: "Central" }];
+  h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5, locations: [{ location_id: "ZA", location_stock_on_hand: 5 }] }];
+  h.zohoDetails = {};
+  h.adjustments = [];
   h.zohoItemsStatus = 200;
   h.stockPriceStatus = 200;
   h.events = [];
@@ -176,7 +209,8 @@ describe("sync-stock-run single flight", () => {
     expect(h.events).toEqual([
       "lock:try",
       "zoho:items",
-      "tn:products",
+      "catalog:load",
+      "tn:locations",
       "tn:stock-price",
       "lock:release",
     ]);
@@ -243,7 +277,7 @@ describe("sync-stock-run single flight", () => {
     expect(payload.dry_run).toBe(true);
     expect(h.lockPoolRequests).toBe(0);
     expect(pool.connectCount).toBe(0);
-    expect(h.events).toEqual(["zoho:items", "tn:products"]);
+    expect(h.events).toEqual(["zoho:items", "catalog:load", "tn:locations"]);
     expect(h.upsertCalls).toHaveLength(0);
     expect(h.logCalls).toHaveLength(0);
   });
@@ -268,12 +302,97 @@ describe("sync-stock-run Tiendanube writes", () => {
   });
 
   it("sends at most 50 variants per stock-price request", async () => {
-    h.zohoItems = Array.from({ length: 60 }, (_, i) => ({ item_id: `z-${i}`, sku: `SKU-${i}`, stock_on_hand: 5 }));
-    h.tnProducts = [{ id: 10, variants: Array.from({ length: 60 }, (_, i) => ({ id: 100 + i, sku: `SKU-${i}`, stock: 3 })) }];
+    h.zohoItems = Array.from({ length: 60 }, (_, i) => ({
+      item_id: `z-${i}`, sku: `SKU-${i}`, locations: [{ location_id: "ZA", location_stock_on_hand: 5 }],
+    }));
+    h.catalog = Array.from({ length: 60 }, (_, i) => ({
+      product_id: 10, variant_id: 100 + i, sku: `SKU-${i}`, price: 0, promotional_price: null,
+      inventory_levels: [{ location_id: "L1", stock: 3 }],
+    }));
 
     const { payload } = await runHandler();
 
     expect(payload).toMatchObject({ updated: 60, errors: 0 });
     expect(h.stockPriceBodies.map((body) => body.flatMap((p: any) => p.variants).length)).toEqual([50, 10]);
+  });
+});
+
+describe("sync-stock-run per location", () => {
+  it("sends explicit location_id for each mapped location in one PATCH", async () => {
+    h.mappings.push({ tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "ZB", zoho_location_name: "Norte" });
+    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
+    h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", locations: [
+      { location_id: "ZA", location_stock_on_hand: 5 }, { location_id: "ZB", location_stock_on_hand: 2 },
+    ] }];
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ updated: 2, errors: 0, blocked: null });
+    expect(h.stockPriceBodies).toEqual([[{
+      id: 10,
+      variants: [{ id: 100, inventory_levels: [{ location_id: "L1", stock: 5 }, { location_id: "L2", stock: 2 }] }],
+    }]]);
+    expect(h.upsertCalls.filter((c) => c.table === "stock_sync_state")).toHaveLength(1);
+  });
+
+  it("fetches Zoho item detail only for matched items when the list lacks locations", async () => {
+    h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 99 }, { item_id: "z-2", sku: "OTHER", stock_on_hand: 1 }];
+    h.zohoDetails = { "z-1": { item_id: "z-1", sku: "SKU-1", locations: [{ location_id: "ZA", location_stock_on_hand: 4 }] } };
+
+    const { payload } = await runHandler();
+
+    expect(h.events.filter((e) => e.startsWith("zoho:item:"))).toEqual(["zoho:item:z-1"]);
+    expect(payload).toMatchObject({ updated: 1, unmatched: 1 });
+    expect(h.stockPriceBodies[0][0].variants[0].inventory_levels).toEqual([{ location_id: "L1", stock: 4 }]);
+  });
+
+  it("blocks without PATCH when Tiendanube has 2+ locations and none is mapped", async () => {
+    h.mappings = [
+      { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
+      { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: null, zoho_location_name: null },
+    ];
+    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
+    h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5 }];
+
+    const { response, payload } = await runHandler();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({ blocked: "locations_unmapped", updated: 0, errors: 0 });
+    expect(h.stockPriceBodies).toHaveLength(0);
+    expect(h.upsertCalls).toHaveLength(0);
+    expect(h.logCalls).toEqual([expect.objectContaining({ operation: "stock_sync_run", status: "error" })]);
+    expect(pool.held.size).toBe(0);
+  });
+
+  it("uses the legacy path without location_id when the locations scope is missing", async () => {
+    h.mappings = [];
+    h.tnLocations = null;
+    h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5 }];
+
+    await runHandler();
+
+    expect(h.stockPriceBodies[0][0].variants[0].inventory_levels).toEqual([{ stock: 5 }]);
+  });
+
+  it("adjusts the mapped Zoho location when Tiendanube is the source", async () => {
+    h.settings = { stock_enabled: true, stock_direction: "tn_to_zoho", stock_priority: "zoho" };
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ updated: 1, errors: 0 });
+    expect(h.stockPriceBodies).toHaveLength(0);
+    expect(h.adjustments).toHaveLength(1);
+    expect(h.adjustments[0].line_items).toEqual([{ item_id: "z-1", quantity_adjusted: -2, location_id: "ZA" }]);
+  });
+
+  it("skips with catalog_not_ready before any network call, dry runs included", async () => {
+    h.catalogStatus = "pending";
+
+    for (const dryRun of [false, true]) {
+      const { payload } = await runHandler({ dryRun });
+      expect(payload).toEqual({ skipped: true, reason: "catalog_not_ready" });
+    }
+    expect(h.events).toEqual([]);
+    expect(h.fetchCalls).toHaveLength(0);
   });
 });
