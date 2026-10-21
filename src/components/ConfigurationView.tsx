@@ -5,6 +5,7 @@ import { ZohoConnectCard } from '@/components/ZohoConnectCard';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FieldHelp } from '@/components/FieldHelp';
 import { CatalogCard } from '@/components/CatalogCard';
+import { LocationMappingsCard } from '@/components/LocationMappingsCard';
 import { CategoryMappingsCard } from '@/components/CategoryMappingsCard';
 import { api } from '@/lib/api';
 import { useSyncSettings } from '@/hooks/useSyncSettings';
@@ -162,6 +163,8 @@ export function ConfigurationView({ storeId, storeName, storeMeta, onDisconnect 
       </Card>
 
       <CatalogCard storeId={storeId} />
+
+      <LocationMappingsCard storeId={storeId} />
 
       <CategoryMappingsCard storeId={storeId} />
     </Box>

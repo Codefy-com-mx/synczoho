@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   getZohoConnection: vi.fn(),
   sendAlert: vi.fn(),
   observer: { onRetry: vi.fn() },
+  refreshLocationMappings: vi.fn(),
 }));
 const store = { store_id: "1", access_token: "t", store_name: "s" };
 const conn = { store_id: "1", organization_id: "o" };
@@ -30,6 +31,7 @@ vi.mock("../../server/functions/_shared/tiendanube", () => ({
 vi.mock("../../server/functions/_shared/zoho", () => ({
   getAdminClient: () => ({}), logSync: m.logSync, getZohoConnection: m.getZohoConnection,
 }));
+vi.mock("../../server/functions/_shared/locations", () => ({ refreshLocationMappings: m.refreshLocationMappings }));
 vi.mock("../../server/functions/_shared/tn-observer", () => ({ logRetryObserver: () => m.observer }));
 vi.mock("../../server/functions/send-alert-email/index", () => ({ default: m.sendAlert }));
 vi.mock("../../server/functions/zoho-create-salesorder/index", () => ({ default: vi.fn() }));
@@ -182,5 +184,20 @@ describe("onEventFailure", () => {
     await onEventFailure(row("internal/backfill", {}, 5), "boom");
     expect(err).toHaveBeenCalledWith("Catalog alert email failed", "1", 500);
     err.mockRestore();
+  });
+});
+
+describe("processEvent locations", () => {
+  it("location/updated refresca los mapeos con conn null si Zoho no está conectado", async () => {
+    m.getZohoConnection.mockRejectedValueOnce(new Error("Zoho no está conectado para esta tienda"));
+    await processEvent(row("location/updated", { id: "01HTMFDH09VC6E2Q8KGTGP44D3" }));
+    expect(m.refreshLocationMappings).toHaveBeenCalledWith({}, store, null);
+  });
+
+  it("location/created y location/deleted usan la conexión activa", async () => {
+    await processEvent(row("location/created", { id: "A" }));
+    await processEvent(row("location/deleted", { id: "A" }));
+    expect(m.refreshLocationMappings).toHaveBeenCalledTimes(2);
+    expect(m.refreshLocationMappings).toHaveBeenNthCalledWith(2, {}, store, conn);
   });
 });

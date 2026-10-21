@@ -6,6 +6,7 @@ import { applyPricesToZoho, diffPrices } from "./functions/_shared/price-from-tn
 import {
   backfillCatalog, deleteProduct, loadProductCatalog, refreshCategory, refreshProduct,
 } from "./functions/_shared/tn-catalog.js";
+import { refreshLocationMappings } from "./functions/_shared/locations.js";
 import { logRetryObserver } from "./functions/_shared/tn-observer.js";
 import { getAdminClient, getZohoConnection, logSync } from "./functions/_shared/zoho.js";
 
@@ -83,6 +84,13 @@ export async function processEvent(row: EventRow): Promise<void> {
     } else {
       await refreshProduct(store, Number(payload.id));
     }
+    return;
+  }
+  if (event.startsWith("location/")) {
+    // created/updated/deleted: se recalcula la lista completa. Sin Zoho activo se refresca solo el lado de Tiendanube.
+    const admin = getAdminClient();
+    const conn = await getZohoConnection(admin, storeId).catch(() => null);
+    await refreshLocationMappings(admin, await getStore(admin, storeId), conn);
     return;
   }
   if (event.startsWith("order/")) {

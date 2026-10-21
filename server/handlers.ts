@@ -3,6 +3,7 @@ import catalogResync from "./functions/catalog-resync/index.js";
 import categoryMappings from "./functions/category-mappings/index.js";
 import customersHistory from "./functions/customers-history/index.js";
 import dashboardMetrics from "./functions/dashboard-metrics/index.js";
+import locationMappings from "./functions/location-mappings/index.js";
 import sendAlertEmail from "./functions/send-alert-email/index.js";
 import syncAutoRun from "./functions/sync-auto-run/index.js";
 import syncCustomersBulk from "./functions/sync-customers-bulk/index.js";
@@ -31,6 +32,7 @@ export const handlers: Record<string, FunctionHandler> = {
   "category-mappings": categoryMappings,
   "customers-history": customersHistory,
   "dashboard-metrics": dashboardMetrics,
+  "location-mappings": locationMappings,
   "send-alert-email": sendAlertEmail,
   "sync-auto-run": syncAutoRun,
   "sync-customers-bulk": syncCustomersBulk,
