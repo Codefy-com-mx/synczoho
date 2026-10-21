@@ -2,8 +2,9 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SyncStockView } from './SyncStockView';
 
-const { invoke, toastSuccess, toastInfo, toastError } = vi.hoisted(() => ({
+const { invoke, toastSuccess, toastInfo, toastError, toastWarning } = vi.hoisted(() => ({
   invoke: vi.fn(),
+  toastWarning: vi.fn(),
   toastSuccess: vi.fn(),
   toastInfo: vi.fn(),
   toastError: vi.fn(),
@@ -14,7 +15,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('sonner', () => ({
-  toast: { success: toastSuccess, info: toastInfo, error: toastError },
+  toast: { success: toastSuccess, info: toastInfo, error: toastError, warning: toastWarning },
 }));
 
 const settings = {
@@ -50,6 +51,7 @@ beforeEach(() => {
   toastSuccess.mockReset();
   toastInfo.mockReset();
   toastError.mockReset();
+  toastWarning.mockReset();
   // The component clears its progress bar with an 800ms timer; fake timers
   // keep that update inside the test instead of leaking an act() warning.
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -98,6 +100,75 @@ describe('SyncStockView manual run', () => {
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
     expect(toastInfo).not.toHaveBeenCalled();
     expect(container.textContent).toContain('Actualizados: 2');
+  });
+});
+
+const UNMAPPED_MSG = 'Hay varias ubicaciones en Tiendanube: elige en Configuración cuál recibe el stock total o vincúlalas con Zoho';
+const MIXED_MSG = 'La configuración de ubicaciones mezcla el stock total con vínculos a ubicaciones de Zoho: deja solo uno de los dos en Configuración';
+const blockedResponse = (blocked: string, dry_run: boolean) => ({
+  dry_run, blocked, unmapped_locations: ['L1', 'L2'], total: 0, updated: 0, inSync: 0, errors: 0, unmatched: 0, details: [],
+});
+
+describe('SyncStockView blocked and unmapped locations', () => {
+  it.each([
+    ['locations_unmapped', UNMAPPED_MSG],
+    ['locations_mixed', MIXED_MSG],
+  ])('a real run blocked by %s warns instead of claiming success', async (blocked, msg) => {
+    mockInvoke(blockedResponse(blocked, false));
+    const { container } = render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await startSync();
+
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(msg));
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain('Actualizados:');
+  });
+
+  it.each([
+    ['locations_unmapped', UNMAPPED_MSG],
+    ['locations_mixed', MIXED_MSG],
+  ])('a preview blocked by %s warns instead of listing 0 changes', async (blocked, msg) => {
+    mockInvoke(blockedResponse(blocked, true));
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /Vista previa/ }));
+    });
+
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(msg));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('a pending catalog on the preview explains it instead of listing undefined changes', async () => {
+    mockInvoke({ skipped: true, reason: 'catalog_not_ready' });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /Vista previa/ }));
+    });
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledWith(expect.stringContaining('catálogo de Tiendanube')));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('a normal run with unlinked locations reports success and how many are not linked', async () => {
+    mockInvoke({ dry_run: false, blocked: null, unmapped_locations: ['L2', 'L3'], total: 1, updated: 1, inSync: 0, errors: 0, unmatched: 0, details: [] });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await startSync();
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    expect(toastInfo).toHaveBeenCalledWith(expect.stringMatching(/2 ubicaciones .*no están vinculadas/));
+  });
+
+  it('a normal run without unlinked locations shows no extra notice', async () => {
+    mockInvoke({ dry_run: false, blocked: null, unmapped_locations: [], total: 1, updated: 1, inSync: 0, errors: 0, unmatched: 0, details: [] });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await startSync();
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 });
 

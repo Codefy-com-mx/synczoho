@@ -16,6 +16,19 @@ type Schedule = 'disabled' | 'hourly' | 'every6h' | 'daily';
 
 const CATALOG_NOT_READY_MSG = 'El catálogo de Tiendanube aún se está sincronizando. Inténtalo de nuevo en unos minutos.';
 
+// Mismos textos que registra sync-stock-run cuando bloquea por ubicaciones.
+const BLOCKED_MSG: Record<string, string> = {
+  locations_unmapped: 'Hay varias ubicaciones en Tiendanube: elige en Configuración cuál recibe el stock total o vincúlalas con Zoho',
+  locations_mixed: 'La configuración de ubicaciones mezcla el stock total con vínculos a ubicaciones de Zoho: deja solo uno de los dos en Configuración',
+};
+
+/** Avisa si la corrida quedó bloqueada por ubicaciones; devuelve true en ese caso. */
+function warnIfBlocked(data: any): boolean {
+  if (!data?.blocked) return false;
+  toast.warning(BLOCKED_MSG[data.blocked] ?? 'La sincronización de stock quedó bloqueada por la configuración de ubicaciones');
+  return true;
+}
+
 const scheduleOptions: Array<{ value: Schedule; label: string }> = [
   { value: 'disabled', label: 'Desactivada (solo manual)' },
   { value: 'hourly', label: 'Cada hora' },
@@ -52,6 +65,11 @@ export function SyncStockView({ storeId }: Props) {
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
+      if (data?.skipped) {
+        toast.info(data.reason === 'catalog_not_ready' ? CATALOG_NOT_READY_MSG : 'Ya hay una sincronización de stock en curso. Espera a que termine e inténtalo de nuevo.');
+        return;
+      }
+      if (warnIfBlocked(data)) return;
       setPreviewResult({
         total: data.total,
         updated: data.updated,
@@ -82,9 +100,16 @@ export function SyncStockView({ storeId }: Props) {
         toast.info(data.reason === 'catalog_not_ready' ? CATALOG_NOT_READY_MSG : 'Ya hay una sincronización de stock en curso. Espera a que termine e inténtalo de nuevo.');
         return;
       }
+      if (warnIfBlocked(data)) return;
       setProgress({ current: data.total || 0, total: data.total || 0 });
       setLastResult({ updated: data.updated, errors: data.errors, total: data.total, inSync: data.inSync });
       toast.success(`Sincronización completa: ${data.updated} actualizados, ${data.errors} errores`);
+      const unlinked = data.unmapped_locations?.length ?? 0;
+      if (unlinked > 0) {
+        toast.info(unlinked === 1
+          ? '1 ubicación de Tiendanube no está vinculada y no recibió stock. Puedes vincularla en Configuración.'
+          : `${unlinked} ubicaciones de Tiendanube no están vinculadas y no recibieron stock. Puedes vincularlas en Configuración.`);
+      }
     } catch (e: any) {
       toast.error(e?.message || 'Error en la sincronización de stock');
     } finally {
