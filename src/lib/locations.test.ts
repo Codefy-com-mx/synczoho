@@ -82,6 +82,20 @@ describe("ZOHO_TOTAL", () => {
     expect(out[1].zoho_location_name).toBe("Stock total de Zoho");
   });
 
+  it("con el total vigente no autovincula por nombre otra location a una de Zoho", async () => {
+    const list = [zo("zN", "Norte")];
+    const out = autoMatchLocations([tn("A", "Central"), tn("B", "Norte")], list, [existing("A", ZOHO_TOTAL), existing("B", null)]);
+    expect(out.map((m) => m.zoho_location_id)).toEqual([ZOHO_TOTAL, null]);
+
+    stubFetch(200, [{ id: "A", name: "Central" }, { id: "B", name: "Norte" }]);
+    h.rows = [existing("A", ZOHO_TOTAL), existing("B", null)];
+    h.zohoFetch.mockResolvedValue(new Response(JSON.stringify({ locations: [{ location_id: "zN", location_name: "Norte" }] })));
+    const res = await refreshLocationMappings({} as any, store, { store_id: "s1" } as any);
+    expect(res.mappings.map((m) => m.zoho_location_id)).toEqual([ZOHO_TOTAL, null]);
+    const ins = h.queries.find((q) => /INSERT INTO location_mappings/.test(q.text))!;
+    expect(ins.values[3]).toEqual([ZOHO_TOTAL, null]);
+  });
+
   it("refresh con lista [] conserva el total y lo persiste", async () => {
     stubFetch(200, [{ id: "A", name: "Tienda" }, { id: "B", name: "Filial" }]);
     h.rows = [existing("B", ZOHO_TOTAL)];

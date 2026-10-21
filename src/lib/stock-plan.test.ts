@@ -183,6 +183,15 @@ describe("planStockChanges with a ZOHO_TOTAL mapping", () => {
     expect(buildStockPatch(tn.changes)).toEqual([]);
   });
 
+  it.each(["zoho_to_tn", "tn_to_zoho", "bidirectional"] as const)("mixed total + real link (%s): blocked, no changes", (direction) => {
+    const plan = planStockChanges({
+      direction, priority: "zoho",
+      zohoItems: [{ item_id: "z1", sku: "SKU-1", stock_on_hand: 12, locations: [{ location_id: "ZA", location_stock_on_hand: 4 }] }],
+      catalog: twoLocs, mappings: [mapping("L1", "ZA"), mapping("L2", ZOHO_TOTAL)], tnLocationCount: 2,
+    });
+    expect(plan).toMatchObject({ changes: [], blocked: "locations_mixed" });
+  });
+
   it("equal stock counts as in sync", () => {
     const plan = planStockChanges({
       ...base, zohoItems: [{ item_id: "z1", sku: "SKU-1", stock_on_hand: 9 }],

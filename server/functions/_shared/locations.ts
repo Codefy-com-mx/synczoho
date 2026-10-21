@@ -68,10 +68,13 @@ export function autoMatchLocations(
     if (prior.get(t.id) === ZOHO_TOTAL) link(t, { id: ZOHO_TOTAL, name: ZOHO_TOTAL_NAME });
   }
   for (const t of tn) if (!linked.has(t.id)) link(t, zohoById.get(prior.get(t.id) ?? ""));
-  for (const t of tn) {
-    if (!linked.has(t.id)) link(t, zoho.find((z) => !used.has(z.id) && norm(z.name) === norm(t.name)));
+  // Con el total vigente no se crean vínculos reales solos: mezclarlos publicaría las mismas unidades dos veces.
+  if (!existing.some((m) => m.zoho_location_id === ZOHO_TOTAL)) {
+    for (const t of tn) {
+      if (!linked.has(t.id)) link(t, zoho.find((z) => !used.has(z.id) && norm(z.name) === norm(t.name)));
+    }
+    if (tn.length === 1 && zoho.length === 1 && !linked.has(tn[0].id)) link(tn[0], zoho[0]);
   }
-  if (tn.length === 1 && zoho.length === 1 && !linked.has(tn[0].id)) link(tn[0], zoho[0]);
   return tn.map((t) => ({
     tn_location_id: t.id,
     tn_location_name: t.name,

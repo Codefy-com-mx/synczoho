@@ -65,9 +65,13 @@ export function planStockChanges(input: {
   tnLocationCount: number | null;
   direction: "zoho_to_tn" | "tn_to_zoho" | "bidirectional";
   priority: "zoho" | "tiendanube";
-}): { changes: StockChange[]; unmatched: string[]; inSync: number; blocked: "locations_unmapped" | null } {
+}): { changes: StockChange[]; unmatched: string[]; inSync: number; blocked: "locations_unmapped" | "locations_mixed" | null } {
   const { pairs, unmatched } = matchBySku(input.zohoItems, input.catalog);
   const linked = input.mappings.filter((m) => m.zoho_location_id);
+  // Total y vínculos reales a la vez publicarían las mismas unidades dos veces: no se toca nada.
+  if (linked.some((m) => m.zoho_location_id === ZOHO_TOTAL) && linked.some((m) => m.zoho_location_id !== ZOHO_TOTAL)) {
+    return { changes: [], unmatched, inSync: 0, blocked: "locations_mixed" };
+  }
   // Varias locations en Tiendanube y ninguna vinculada: nunca se reparte ni se adivina.
   if (linked.length === 0 && (input.tnLocationCount ?? 0) >= 2) {
     return { changes: [], unmatched, inSync: 0, blocked: "locations_unmapped" };

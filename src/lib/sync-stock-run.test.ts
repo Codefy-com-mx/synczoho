@@ -394,6 +394,25 @@ describe("sync-stock-run per location", () => {
     expect(h.stockPriceBodies).toEqual([[{ id: 10, variants: [{ id: 100, inventory_levels: [{ location_id: "L2", stock: 7 }] }] }]]);
   });
 
+  it.each(["zoho_to_tn", "tn_to_zoho", "bidirectional"])("blocks a mixed total + real link state without PATCH or adjustments (%s)", async (direction) => {
+    h.settings = { stock_enabled: true, stock_direction: direction, stock_priority: "zoho" };
+    h.mappings = [
+      { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: "ZA", zoho_location_name: "Central" },
+      { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "__total__", zoho_location_name: "Stock total de Zoho" },
+    ];
+    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ blocked: "locations_mixed", updated: 0, errors: 0 });
+    expect(h.stockPriceBodies).toHaveLength(0);
+    expect(h.adjustments).toHaveLength(0);
+    expect(h.logCalls).toEqual([expect.objectContaining({ status: "error" })]);
+    expect(h.logCalls[0].message).toContain(
+      "La configuración de ubicaciones mezcla el stock total con vínculos a ubicaciones de Zoho: deja solo uno de los dos en Configuración",
+    );
+  });
+
   it("adjusts the Zoho org total without location_id in ZOHO_TOTAL mode", async () => {
     h.settings = { stock_enabled: true, stock_direction: "tn_to_zoho", stock_priority: "zoho" };
     h.mappings = [

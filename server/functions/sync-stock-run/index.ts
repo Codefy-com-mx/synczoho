@@ -157,7 +157,9 @@ export default serve(async (req) => {
       await logSync(admin, storeId, {
         operation: "stock_sync_run",
         status: "error",
-        message: "Hay varias ubicaciones en Tiendanube: elige en Configuración cuál recibe el stock total o vincúlalas con Zoho",
+        message: blocked === "locations_mixed"
+          ? "La configuración de ubicaciones mezcla el stock total con vínculos a ubicaciones de Zoho: deja solo uno de los dos en Configuración"
+          : "Hay varias ubicaciones en Tiendanube: elige en Configuración cuál recibe el stock total o vincúlalas con Zoho",
         duration_ms: Date.now() - t0,
         payload: { blocked, tn_locations: tnLocationCount },
       });
