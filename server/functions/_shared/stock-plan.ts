@@ -1,6 +1,6 @@
 // Plan de stock por location (MultiCD): puro, sin red ni base de datos.
 import type { CatalogVariant } from "./tn-catalog.js";
-import type { LocationMapping } from "./locations.js";
+import { ZOHO_TOTAL, type LocationMapping } from "./locations.js";
 import type { StockPriceProduct } from "./stock-price-batch.js";
 
 export interface ZohoStockItem {
@@ -65,9 +65,13 @@ export function planStockChanges(input: {
   tnLocationCount: number | null;
   direction: "zoho_to_tn" | "tn_to_zoho" | "bidirectional";
   priority: "zoho" | "tiendanube";
-}): { changes: StockChange[]; unmatched: string[]; inSync: number; blocked: "locations_unmapped" | null } {
+}): { changes: StockChange[]; unmatched: string[]; inSync: number; blocked: "locations_unmapped" | "locations_mixed" | null } {
   const { pairs, unmatched } = matchBySku(input.zohoItems, input.catalog);
   const linked = input.mappings.filter((m) => m.zoho_location_id);
+  // Total y vínculos reales a la vez publicarían las mismas unidades dos veces: no se toca nada.
+  if (linked.some((m) => m.zoho_location_id === ZOHO_TOTAL) && linked.some((m) => m.zoho_location_id !== ZOHO_TOTAL)) {
+    return { changes: [], unmatched, inSync: 0, blocked: "locations_mixed" };
+  }
   // Varias locations en Tiendanube y ninguna vinculada: nunca se reparte ni se adivina.
   if (linked.length === 0 && (input.tnLocationCount ?? 0) >= 2) {
     return { changes: [], unmatched, inSync: 0, blocked: "locations_unmapped" };
@@ -93,15 +97,22 @@ export function planStockChanges(input: {
   };
 
   for (const { item, variant } of pairs) {
+    const zohoTotal = Number(item.stock_on_hand ?? item.actual_available_stock ?? 0);
     if (linked.length === 0) {
       // Camino legado (una sola location o sin scope): stock total, Tiendanube usa su primera location.
       const tnQty = variant.inventory_levels.reduce((sum, l) => sum + l.stock, 0);
-      add(item, variant, null, null, Number(item.stock_on_hand ?? item.actual_available_stock ?? 0), tnQty);
+      add(item, variant, null, null, zohoTotal, tnQty);
       continue;
     }
-    // Sin datos por location en Zoho no se sabe cuánto hay en cada almacén: no se toca.
-    if (!Array.isArray(item.locations)) continue;
     for (const m of linked) {
+      if (m.zoho_location_id === ZOHO_TOTAL) {
+        // Org sin multi-almacén: esta location de Tiendanube lleva el total de Zoho (sin location de Zoho).
+        const tl = variant.inventory_levels.find((l) => l.location_id === m.tn_location_id);
+        add(item, variant, m.tn_location_id, null, zohoTotal, tl?.stock ?? 0);
+        continue;
+      }
+      // Sin datos por location en Zoho no se sabe cuánto hay en cada almacén: no se toca.
+      if (!Array.isArray(item.locations)) continue;
       const zl = item.locations.find((l) => String(l.location_id) === m.zoho_location_id);
       const tl = variant.inventory_levels.find((l) => l.location_id === m.tn_location_id);
       add(item, variant, m.tn_location_id, m.zoho_location_id, Number(zl?.location_stock_on_hand ?? 0) || 0, tl?.stock ?? 0);
@@ -124,4 +135,35 @@ export function buildStockPatch(
     v.inventory_levels.push(c.tn_location_id == null ? { stock: c.to } : { location_id: c.tn_location_id, stock: c.to });
   }
   return [...products].map(([id, variants]) => ({ id, variants: [...variants.values()] }));
+}
+
+/**
+ * Stock inicial de una variante (alta o actualización desde Zoho) como `inventory_levels`.
+ * Mismas reglas que planStockChanges: sin vínculos y 2+ locations no se envía nada; total y
+ * vínculos reales a la vez tampoco. Si `levels` viene vacío, `warning` dice por qué.
+ */
+export function resolveInitialLevels(input: {
+  total: number;
+  zohoLocations?: Array<{ location_id: string; stock: number }>;
+  mappings: LocationMapping[];
+  tnLocationCount: number | null;
+}): { levels: Array<{ location_id?: string; stock: number }>; warning?: string } {
+  const qty = (n: unknown) => Math.max(0, Math.floor(Number(n) || 0));
+  const linked = input.mappings.filter((m) => m.zoho_location_id);
+  const hasTotal = linked.some((m) => m.zoho_location_id === ZOHO_TOTAL);
+  if (hasTotal && linked.some((m) => m.zoho_location_id !== ZOHO_TOTAL)) {
+    return { levels: [], warning: "locations mezcladas" };
+  }
+  if (linked.length === 0) {
+    if ((input.tnLocationCount ?? 0) >= 2) return { levels: [], warning: "locations sin mapear" };
+    return { levels: [{ stock: qty(input.total) }] };
+  }
+  return {
+    levels: linked.map((m) => ({
+      location_id: m.tn_location_id,
+      stock: hasTotal
+        ? qty(input.total)
+        : qty(input.zohoLocations?.find((l) => String(l.location_id) === m.zoho_location_id)?.stock),
+    })),
+  };
 }

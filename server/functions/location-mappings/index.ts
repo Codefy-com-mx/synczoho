@@ -6,7 +6,7 @@ import { getPool } from "../../db.js";
 import { corsHeaders, getAdminClient, getZohoConnection } from "../_shared/zoho.js";
 import { getStore } from "../_shared/tiendanube.js";
 import {
-  fetchZohoLocations, loadLocationMappings, refreshLocationMappings,
+  ZOHO_TOTAL, ZOHO_TOTAL_NAME, fetchZohoLocations, loadLocationMappings, refreshLocationMappings,
 } from "../_shared/locations.js";
 
 const json = (body: unknown, status = 200) =>
@@ -29,19 +29,29 @@ export default serve(async (req) => {
       const final = new Map(stored.map((m) => [m.tn_location_id, m.zoho_location_id]));
       for (const m of mappings) {
         if (!final.has(String(m?.tn_location_id))) return json({ error: "Location de Tiendanube desconocida" }, 400);
-        if (m.zoho_location_id !== null) {
+        if (m.zoho_location_id === ZOHO_TOTAL) {
+          // Con Zoho caído (null) o sin locations ([]) se acepta; con locations hay que vincular las reales.
+          if (zoho?.length) return json({ error: "Zoho tiene ubicaciones: vincula cada una en lugar del stock total" }, 400);
+        } else if (m.zoho_location_id !== null) {
           if (!zoho) return json({ error: "Zoho no está disponible, inténtalo de nuevo" }, 503);
           if (!zoho.some((z) => z.id === m.zoho_location_id)) return json({ error: "Location de Zoho inexistente" }, 400);
         }
         final.set(m.tn_location_id, m.zoho_location_id);
       }
-      // Una location de Zoho por location de Tiendanube, evaluado sobre el estado final del lote.
       const ids = [...final.values()].filter((v) => v !== null);
+      const totals = ids.filter((v) => v === ZOHO_TOTAL).length;
+      if (totals > 1) return json({ error: "Solo una ubicación de Tiendanube puede recibir el stock total" }, 400);
+      if (totals === 1 && ids.length > 1) {
+        return json({ error: "El stock total no se puede combinar con ubicaciones de Zoho" }, 400);
+      }
+      // Una location de Zoho por location de Tiendanube, evaluado sobre el estado final del lote.
       if (new Set(ids).size !== ids.length) {
         return json({ error: "Una location de Zoho solo puede vincularse a una location de Tiendanube" }, 400);
       }
       for (const m of mappings) {
-        const z = zoho?.find((l) => l.id === m.zoho_location_id);
+        const z = m.zoho_location_id === ZOHO_TOTAL
+          ? { id: ZOHO_TOTAL, name: ZOHO_TOTAL_NAME }
+          : zoho?.find((l) => l.id === m.zoho_location_id);
         await getPool().query(
           "UPDATE location_mappings SET zoho_location_id=$3, zoho_location_name=$4 WHERE store_id=$1 AND tn_location_id=$2",
           [id, m.tn_location_id, z?.id ?? null, z?.name ?? null],

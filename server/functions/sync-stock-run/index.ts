@@ -21,7 +21,7 @@ import {
 import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
-import { fetchTnLocations, loadLocationMappings } from "../_shared/locations.js";
+import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings } from "../_shared/locations.js";
 import { buildStockPatch, deriveTnLocationCount, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
 import { logRetryObserver } from "../_shared/tn-observer.js";
 
@@ -94,13 +94,19 @@ export default serve(async (req) => {
     // 2) Variantes de Tiendanube desde la caché local, mapeos y cantidad de locations
     const catalog = await loadCatalog(storeId);
     const mappings = await loadLocationMappings(storeId);
-    const tnLocationCount = deriveTnLocationCount(await fetchTnLocations(store), mappings, catalog);
+    const tnLocations = await fetchTnLocations(store);
+    const tnLocationCount = deriveTnLocationCount(tnLocations, mappings, catalog);
+    // Locations de Tiendanube conocidas y sin vincular (solo se informan si hay al menos un vínculo).
+    const linkedIds = new Set(mappings.filter((m) => m.zoho_location_id).map((m) => m.tn_location_id));
+    const unmapped_locations = linkedIds.size === 0 ? [] : [
+      ...new Set((tnLocations ? tnLocations.map((l) => l.id) : mappings.map((m) => m.tn_location_id)).filter((l) => !linkedIds.has(l))),
+    ];
 
     // 3) Si la lista de Zoho no trae stock por location, pedir el detalle solo de los ítems con match
     let errors = 0;
     const details: any[] = [];
     const { pairs } = matchBySku(zohoItems, catalog);
-    if (mappings.some((m) => m.zoho_location_id)) {
+    if (mappings.some((m) => m.zoho_location_id && m.zoho_location_id !== ZOHO_TOTAL)) {
       const queue = pairs.map((p) => p.item).filter((it) => !Array.isArray(it.locations));
       await Promise.all(Array.from({ length: ZOHO_DETAIL_CONCURRENCY }, async () => {
         for (let it = queue.shift(); it; it = queue.shift()) {
@@ -133,6 +139,7 @@ export default serve(async (req) => {
       return json({
         dry_run: true,
         blocked,
+        unmapped_locations,
         total,
         updated: plan.changes.length,
         inSync,
@@ -150,13 +157,15 @@ export default serve(async (req) => {
       await logSync(admin, storeId, {
         operation: "stock_sync_run",
         status: "error",
-        message: `Stock no sincronizado: la tienda tiene ${tnLocationCount} locations en Tiendanube y ninguna está vinculada a un almacén de Zoho. Vinculalas en Configuración.`,
+        message: blocked === "locations_mixed"
+          ? "La configuración de ubicaciones mezcla el stock total con vínculos a ubicaciones de Zoho: deja solo uno de los dos en Configuración"
+          : "Hay varias ubicaciones en Tiendanube: elige en Configuración cuál recibe el stock total o vincúlalas con Zoho",
         duration_ms: Date.now() - t0,
         payload: { blocked, tn_locations: tnLocationCount },
       });
       terminalLogged = true;
       return json({
-        dry_run: false, blocked, total: 0, updated: 0, inSync: 0, errors: 0,
+        dry_run: false, blocked, unmapped_locations, total: 0, updated: 0, inSync: 0, errors: 0,
         unmatched: unmatched.length, unmatched_sample: unmatched.slice(0, 20), details: [],
       });
     }
@@ -261,13 +270,14 @@ export default serve(async (req) => {
       status: errors === 0 ? "success" : "error",
       message: `Vinculados: ${pairs.length} · Actualizados: ${updated} · Ya sync: ${inSync} · Errores: ${errors} · Sin match: ${unmatched.length}`,
       duration_ms: Date.now() - t0,
-      payload: { updated, inSync, errors, total, unmatched: unmatched.slice(0, 50) },
+      payload: { updated, inSync, errors, total, unmatched: unmatched.slice(0, 50), unmapped_locations },
     });
     terminalLogged = true;
 
     return json({
       dry_run: false,
       blocked: null,
+      unmapped_locations,
       total,
       updated,
       inSync,

@@ -54,4 +54,48 @@ describe('LocationMappingsCard', () => {
     expect(select.value).toBe('z9');
     expect(screen.getByRole('option', { name: 'Bodega (no disponible)' })).toBeInTheDocument();
   });
+
+  describe('stock total de Zoho', () => {
+    const two = (a: string | null, b: string | null, zl = [] as typeof zoho_locations) => ({
+      data: {
+        mappings: [row(a), { ...row(b), tn_location_id: 'B', tn_location_name: 'Filial' }],
+        tn_available: true, zoho_available: zl.length > 0, zoho_locations: zl,
+      },
+      error: null,
+    });
+    const TOTAL = 'Stock total de Zoho (esta ubicación)';
+
+    it('ofrece la opción de total solo cuando Zoho no tiene locations y hay 2+ en Tiendanube', async () => {
+      invoke.mockResolvedValueOnce(two(null, null));
+      const { container, unmount } = render(<LocationMappingsCard storeId="s1" />);
+      await screen.findByText('Central');
+      expect(container.querySelectorAll(`option[value="__total__"]`)).toHaveLength(2);
+      unmount();
+
+      invoke.mockResolvedValueOnce(two(null, null, zoho_locations));
+      render(<LocationMappingsCard storeId="s1" />);
+      await screen.findByText('Central');
+      expect(screen.queryByRole('option', { name: TOTAL })).not.toBeInTheDocument();
+    });
+
+    it('un vínculo guardado al total se muestra como esa opción y la deshabilita en las otras filas', async () => {
+      invoke.mockResolvedValueOnce(two(null, '__total__'));
+      const { container } = render(<LocationMappingsCard storeId="s1" />);
+      await screen.findByText('Central');
+      const b = container.querySelector('select[name="loc-B"]') as HTMLSelectElement;
+      expect(b.value).toBe('__total__');
+      expect(screen.queryByText(/no disponible/)).not.toBeInTheDocument();
+      const aOpt = container.querySelector('select[name="loc-A"] option[value="__total__"]') as HTMLOptionElement;
+      expect(aOpt.disabled).toBe(true);
+      expect((b.querySelector('option[value="__total__"]') as HTMLOptionElement).disabled).toBe(false);
+    });
+
+    it('un total guardado con Zoho ya con locations tampoco dice "no disponible"', async () => {
+      invoke.mockResolvedValueOnce(two('__total__', null, zoho_locations));
+      const { container } = render(<LocationMappingsCard storeId="s1" />);
+      await screen.findByText('Central');
+      expect((container.querySelector('select[name="loc-A"]') as HTMLSelectElement).value).toBe('__total__');
+      expect(screen.queryByText(/no disponible/)).not.toBeInTheDocument();
+    });
+  });
 });

@@ -16,6 +16,10 @@ export interface LocationsResult {
   mappings: LocationMapping[]; tn_available: boolean; zoho_available: boolean; zoho_locations: ZohoLocation[];
 }
 
+/** `zoho_location_id` centinela: esa location de Tiendanube recibe el stock total del ítem de Zoho. */
+export const ZOHO_TOTAL = "__total__";
+export const ZOHO_TOTAL_NAME = "Stock total de Zoho";
+
 const norm = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim();
 
 /** `null` si no hay scope read_locations o la API falla: el llamador no debe tocar nada. */
@@ -59,11 +63,18 @@ export function autoMatchLocations(
     used.add(z.id);
     linked.set(t.id, z);
   };
-  for (const t of tn) link(t, zohoById.get(prior.get(t.id) ?? ""));
+  // El vínculo al total no está en la lista de Zoho: se conserva siempre (el comerciante lo cambia en la UI).
   for (const t of tn) {
-    if (!linked.has(t.id)) link(t, zoho.find((z) => !used.has(z.id) && norm(z.name) === norm(t.name)));
+    if (prior.get(t.id) === ZOHO_TOTAL) link(t, { id: ZOHO_TOTAL, name: ZOHO_TOTAL_NAME });
   }
-  if (tn.length === 1 && zoho.length === 1 && !linked.has(tn[0].id)) link(tn[0], zoho[0]);
+  for (const t of tn) if (!linked.has(t.id)) link(t, zohoById.get(prior.get(t.id) ?? ""));
+  // Con el total vigente no se crean vínculos reales solos: mezclarlos publicaría las mismas unidades dos veces.
+  if (!existing.some((m) => m.zoho_location_id === ZOHO_TOTAL)) {
+    for (const t of tn) {
+      if (!linked.has(t.id)) link(t, zoho.find((z) => !used.has(z.id) && norm(z.name) === norm(t.name)));
+    }
+    if (tn.length === 1 && zoho.length === 1 && !linked.has(tn[0].id)) link(tn[0], zoho[0]);
+  }
   return tn.map((t) => ({
     tn_location_id: t.id,
     tn_location_name: t.name,
