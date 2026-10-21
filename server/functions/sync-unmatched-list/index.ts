@@ -7,7 +7,7 @@ import {
   getZohoConnection,
   zohoFetch,
 } from "../_shared/zoho.js";
-import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
+import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 
 function norm(s: unknown) {
   return (s ?? "").toString().trim().toUpperCase();
@@ -27,9 +27,12 @@ export default serve(async (req) => {
     const { storeId } = await req.json();
     if (!storeId) return json({ error: "storeId requerido" }, 400);
 
+    if ((await getCatalogStatus(storeId)) === "pending") {
+      return json({ skipped: true, reason: "catalog_not_ready" });
+    }
+
     const admin = getAdminClient();
     const conn = await getZohoConnection(admin, storeId);
-    const store = await getStore(admin, storeId);
 
     // 1) SKUs de Zoho
     const zohoItems: { item_id: string; name: string; sku: string; rate: number; stock_on_hand: number }[] = [];
@@ -53,30 +56,19 @@ export default serve(async (req) => {
       if (++page > 50) break;
     }
 
-    // 2) SKUs de Tiendanube
+    // 2) SKUs de Tiendanube desde la caché local. La caché no guarda el nombre del producto.
     const tnItems: { product_id: number; product_name: string; variant_id: number; sku: string; price: number; stock: number }[] = [];
-    let tnPage = 1;
-    while (true) {
-      const resp = await tnFetchWithRetry(store, `/products?per_page=200&page=${tnPage}&fields=id,name,variants`);
-      if (!resp.ok) break;
-      const arr = await resp.json();
-      for (const p of arr || []) {
-        for (const v of p.variants || []) {
-          const sku = norm(v.sku);
-          if (sku) {
-            tnItems.push({
-              product_id: p.id,
-              product_name: p.name?.es ?? p.name?.pt ?? p.name ?? "",
-              variant_id: v.id,
-              sku,
-              price: Number(v.price ?? 0),
-              stock: Number(v.inventory_levels?.[0]?.stock ?? v.stock ?? 0),
-            });
-          }
-        }
-      }
-      if (!arr || arr.length < 200) break;
-      if (++tnPage > 50) break;
+    for (const v of await loadCatalog(storeId)) {
+      const sku = norm(v.sku);
+      if (!sku) continue;
+      tnItems.push({
+        product_id: v.product_id,
+        product_name: "",
+        variant_id: v.variant_id,
+        sku,
+        price: v.price,
+        stock: v.inventory_levels.reduce((sum, l) => sum + l.stock, 0),
+      });
     }
 
     // 3) Cruzar

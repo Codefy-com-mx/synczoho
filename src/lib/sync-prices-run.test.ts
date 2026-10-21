@@ -5,7 +5,8 @@ const h = vi.hoisted(() => ({
   pool: null as any,
   lockPoolRequests: 0,
   zohoItems: [] as any[],
-  tnProducts: [] as any[],
+  catalog: [] as any[],
+  catalogStatus: "ready" as "pending" | "ready" | "stale",
   zohoItemsStatus: 200,
   stockPriceStatus: 200,
   events: [] as string[],
@@ -52,10 +53,7 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
   tnFetchWithRetry: async (_store: any, path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     h.fetchCalls.push({ path, method });
-    if (path.startsWith("/products?")) {
-      h.events.push("tn:products");
-      return Response.json(h.tnProducts);
-    }
+    if (path.startsWith("/products?")) throw new Error(`Unexpected polling: ${path}`);
     if (path === "/products/stock-price") {
       h.events.push("tn:stock-price");
       h.stockPriceBodies.push(JSON.parse(String(init?.body)));
@@ -67,6 +65,14 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
     return new Response("not found", { status: 404 });
   },
   getTnDefaultLocationId: async () => 1,
+}));
+
+vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
+  getCatalogStatus: async () => h.catalogStatus,
+  loadCatalog: async () => {
+    h.events.push("catalog:load");
+    return h.catalog;
+  },
 }));
 
 import syncPricesRun from "../../server/functions/sync-prices-run/index";
@@ -135,9 +141,8 @@ beforeEach(() => {
   h.pool = pool;
   h.lockPoolRequests = 0;
   h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", rate: 15, sales_rate: null }];
-  h.tnProducts = [
-    { id: 10, variants: [{ id: 100, sku: "SKU-1", price: 10, promotional_price: null }] },
-  ];
+  h.catalog = [{ product_id: 10, variant_id: 100, sku: "SKU-1", price: 10, promotional_price: null, inventory_levels: [] }];
+  h.catalogStatus = "ready";
   h.zohoItemsStatus = 200;
   h.stockPriceStatus = 200;
   h.events = [];
@@ -155,7 +160,7 @@ describe("sync-prices-run single flight", () => {
     expect(h.events).toEqual([
       "lock:try",
       "zoho:items",
-      "tn:products",
+      "catalog:load",
       "tn:stock-price",
       "lock:release",
     ]);
@@ -221,15 +226,47 @@ describe("sync-prices-run single flight", () => {
     expect(payload.dry_run).toBe(true);
     expect(h.lockPoolRequests).toBe(0);
     expect(pool.connectCount).toBe(0);
-    expect(h.events).toEqual(["zoho:items", "tn:products"]);
+    expect(h.events).toEqual(["zoho:items", "catalog:load"]);
     expect(h.logCalls).toHaveLength(0);
+  });
+});
+
+describe("sync-prices-run catalog cache", () => {
+  it("never polls /products and PATCHes the same prices from the cache", async () => {
+    await runHandler();
+
+    expect(h.fetchCalls.map((c) => c.path)).toEqual(["/products/stock-price"]);
+    expect(h.stockPriceBodies).toEqual([
+      [{ id: 10, variants: [{ id: 100, price: "15.00", promotional_price: null }] }],
+    ]);
+  });
+
+  it("skips with catalog_not_ready without touching Zoho, Tiendanube or the lock", async () => {
+    h.catalogStatus = "pending";
+
+    const { response, payload } = await runHandler();
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ skipped: true, reason: "catalog_not_ready" });
+    expect(h.events).toEqual([]);
+    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.lockPoolRequests).toBe(0);
+    expect(h.logCalls).toHaveLength(0);
+  });
+
+  it("still runs when the catalog is stale", async () => {
+    h.catalogStatus = "stale";
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ updated: 1, errors: 0 });
   });
 });
 
 describe("sync-prices-run batching", () => {
   it("sends at most 50 variants per stock-price request", async () => {
     h.zohoItems = Array.from({ length: 60 }, (_, i) => ({ item_id: `z-${i}`, sku: `SKU-${i}`, rate: 15, sales_rate: null }));
-    h.tnProducts = [{ id: 10, variants: Array.from({ length: 60 }, (_, i) => ({ id: 100 + i, sku: `SKU-${i}`, price: 10, promotional_price: null })) }];
+    h.catalog = Array.from({ length: 60 }, (_, i) => ({ product_id: 10, variant_id: 100 + i, sku: `SKU-${i}`, price: 10, promotional_price: null, inventory_levels: [] }));
 
     const { payload } = await runHandler();
 

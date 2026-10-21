@@ -11,6 +11,7 @@ import {
   logSync,
 } from "../_shared/zoho.js";
 import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
+import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
 const EPSILON = 0.01; // diferencia mínima para considerar que el precio cambió
@@ -54,6 +55,11 @@ export default serve(async (req) => {
     const dryRun = body?.dryRun === true;
     if (!storeId) return json({ error: "storeId requerido" }, 400);
 
+    // Sin catálogo local todavía no hay contra qué comparar: neutro, sin tocar Zoho ni Tiendanube.
+    if ((await getCatalogStatus(storeId)) === "pending") {
+      return json({ skipped: true, reason: "catalog_not_ready" });
+    }
+
     // A real run takes the per-(store, operation) session advisory lock before
     // any Zoho/Tiendanube call. The lock comes from the dedicated lock pool so
     // it cannot starve handler queries. Contention returns a neutral response
@@ -83,38 +89,25 @@ export default serve(async (req) => {
       if (++page > 50) break;
     }
 
-    // 2) Cargar todos los productos de Tiendanube con sus variantes y precios
-    const tnProducts: any[] = [];
-    let tnPage = 1;
-    while (true) {
-      const resp = await tnFetchWithRetry(store, `/products?per_page=200&page=${tnPage}&fields=id,variants`);
-      if (!resp.ok) { await resp.text(); throw new Error(`Tiendanube products ${resp.status}`); }
-      const arr = await resp.json();
-      tnProducts.push(...arr);
-      if (!arr || arr.length < 200) break;
-      if (++tnPage > 50) break;
-    }
+    // 2) Variantes de Tiendanube desde la caché local (sin polling a la API)
+    const catalog = await loadCatalog(storeId);
 
-    // 3) Mapear TN por SKU
+    // 3) Mapear TN por SKU (la primera variante por SKU gana)
     const tnBySku = new Map<string, {
       product_id: number;
       variant_id: number;
       price: number;
       promo: number | null;
     }>();
-    for (const p of tnProducts) {
-      for (const v of p.variants || []) {
-        const sku = norm(v.sku);
-        if (!sku) continue;
-        if (!tnBySku.has(sku)) {
-          tnBySku.set(sku, {
-            product_id: p.id,
-            variant_id: v.id,
-            price: Number(v.price ?? 0),
-            promo: v.promotional_price != null ? Number(v.promotional_price) : null,
-          });
-        }
-      }
+    for (const v of catalog) {
+      const sku = norm(v.sku);
+      if (!sku || tnBySku.has(sku)) continue;
+      tnBySku.set(sku, {
+        product_id: v.product_id,
+        variant_id: v.variant_id,
+        price: v.price,
+        promo: v.promotional_price,
+      });
     }
 
     // 4) Cruzar por SKU y detectar diferencias de precio

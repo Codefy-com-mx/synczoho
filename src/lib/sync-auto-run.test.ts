@@ -337,6 +337,18 @@ describe("sync-auto-run scheduled admission", () => {
     expect(pool.rows.get("store-1:stock_sync_run")?.lastSuccessAt).toBeNull();
   });
 
+  it("treats a child whose catalog is not ready as a neutral skip without alerting", async () => {
+    h.child.payload = { skipped: true, reason: "catalog_not_ready" };
+
+    const { payload } = await runHandler();
+
+    expect(payload.results).toEqual([{ store_id: "store-1", stock: "skip (catalog_not_ready)" }]);
+    expect(pool.finishCalls[0][3]).toBe("skipped");
+    expect(pool.finishCalls[0][4]).toBeNull();
+    expect(h.alertCalls).toHaveLength(0);
+    expect(pool.rows.get("store-1:stock_sync_run")?.lastSuccessAt).toBeNull();
+  });
+
   it("keeps the retry anchored at claim time after a neutral skip", async () => {
     h.child.payload = { skipped: true, reason: "already_running" };
 
