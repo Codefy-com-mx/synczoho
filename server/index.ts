@@ -4,6 +4,7 @@ import path from "node:path";
 import { closeDatabase, getPool } from "./db.js";
 import { handlers } from "./handlers.js";
 import { runMigrations } from "./migrate.js";
+import { resyncAllStores } from "./functions/_shared/catalog-bootstrap.js";
 import { applySecurityHeaders } from "./security-headers.js";
 import { authorizeFunction } from "./auth.js";
 import { runWebhookWorker } from "./webhook-worker.js";
@@ -164,6 +165,9 @@ async function shutdown(signal: string): Promise<void> {
 }
 
 await runMigrations();
+// Transición única al desplegar: webhooks nuevos y backfill de catálogos pendientes (en segundo plano).
+const bootAppUrl = process.env.APP_URL?.replace(/\/$/, "");
+if (bootAppUrl) void resyncAllStores(bootAppUrl).catch(console.error);
 server.listen(port, host, () => {
   console.log(`ZohoSync listening on http://${host}:${port}`);
 });

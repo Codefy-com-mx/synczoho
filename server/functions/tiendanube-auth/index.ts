@@ -2,6 +2,7 @@ import { serve } from "../../runtime.js";
 import { corsHeaders, getAdminClient, logSync } from "../_shared/zoho.js";
 import { TN_USER_AGENT } from "../_shared/tiendanube.js";
 import { syncStoreWebhooks } from "../_shared/webhooks.js";
+import { enqueueBackfill } from "../_shared/tn-catalog.js";
 
 export default serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -136,6 +137,17 @@ export default serve(async (req) => {
           message: error instanceof Error ? error.message : "Error al registrar webhooks",
         });
       }
+    }
+
+    // Carga inicial (o recarga al reinstalar) del catálogo local; sin bloquear la instalación.
+    try {
+      await enqueueBackfill(storeId.toString());
+    } catch (error) {
+      await logSync(database, storeId.toString(), {
+        operation: "catalog_backfill",
+        status: "error",
+        message: error instanceof Error ? error.message : "Error al encolar el backfill del catálogo",
+      });
     }
 
     return new Response(

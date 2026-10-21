@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   syncStoreWebhooks: vi.fn(),
+  enqueueBackfill: vi.fn(),
   logs: [] as any[],
 }));
 
@@ -27,6 +28,10 @@ vi.mock("../../server/functions/_shared/webhooks.js", () => ({
   syncStoreWebhooks: h.syncStoreWebhooks,
 }));
 
+vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
+  enqueueBackfill: h.enqueueBackfill,
+}));
+
 import handler from "../../server/functions/tiendanube-auth/index";
 
 function install() {
@@ -42,6 +47,7 @@ beforeEach(() => {
   process.env.APP_URL = "https://app.example.com/";
   h.logs = [];
   h.syncStoreWebhooks.mockReset().mockResolvedValue({ created: [], deleted: 0, errors: [] });
+  h.enqueueBackfill.mockReset().mockResolvedValue(true);
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
     if (input.endsWith("/apps/authorize/token")) {
       return Response.json({ access_token: "tn-token", user_id: 123 });
@@ -72,6 +78,31 @@ describe("tiendanube-auth", () => {
     expect((await response.json()).success).toBe(true);
     expect(h.logs).toEqual([
       expect.objectContaining({ storeId: "123", operation: "webhooks_register", status: "error" }),
+    ]);
+  });
+
+  it("enqueues a catalog backfill after installing", async () => {
+    await install();
+
+    expect(h.enqueueBackfill).toHaveBeenCalledWith("123");
+  });
+
+  it("enqueues the backfill even when webhook registration fails", async () => {
+    h.syncStoreWebhooks.mockRejectedValue(new Error("Tiendanube API 500"));
+
+    await install();
+
+    expect(h.enqueueBackfill).toHaveBeenCalledWith("123");
+  });
+
+  it("does not block the installation when the backfill cannot be enqueued", async () => {
+    h.enqueueBackfill.mockRejectedValue(new Error("db down"));
+
+    const response = await install();
+
+    expect(response.status).toBe(200);
+    expect(h.logs).toEqual([
+      expect.objectContaining({ storeId: "123", operation: "catalog_backfill", status: "error" }),
     ]);
   });
 });

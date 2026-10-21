@@ -1,4 +1,5 @@
 import type { FunctionHandler } from "./runtime.js";
+import catalogResync from "./functions/catalog-resync/index.js";
 import categoryMappings from "./functions/category-mappings/index.js";
 import customersHistory from "./functions/customers-history/index.js";
 import dashboardMetrics from "./functions/dashboard-metrics/index.js";
@@ -26,6 +27,7 @@ import zohoListItems from "./functions/zoho-list-items/index.js";
 import zohoSyncImport from "./functions/zoho-sync-import/index.js";
 
 export const handlers: Record<string, FunctionHandler> = {
+  "catalog-resync": catalogResync,
   "category-mappings": categoryMappings,
   "customers-history": customersHistory,
   "dashboard-metrics": dashboardMetrics,

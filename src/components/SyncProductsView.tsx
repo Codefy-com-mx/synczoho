@@ -106,6 +106,7 @@ export function SyncProductsView({ storeId }: SyncProductsViewProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [publishOnImport, setPublishOnImport] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importingCatalog, setImportingCatalog] = useState(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [results, setResults] = useState<ImportResult[] | null>(null);
   const [detail, setDetail] = useState<ZohoItem | null>(null);
@@ -262,6 +263,22 @@ export function SyncProductsView({ storeId }: SyncProductsViewProps) {
     } finally {
       setImporting(false);
       setTimeout(() => setImportProgress(null), 800);
+    }
+  };
+
+  const importFromTiendanube = async () => {
+    setImportingCatalog(true);
+    try {
+      const { data, error } = await api.functions.invoke('catalog-resync', {
+        body: { storeId, action: 'resync' },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success('Importación de productos de Tiendanube iniciada. Puede tardar unos minutos.');
+    } catch (err: any) {
+      toast.error(err?.message || 'No se pudo iniciar la importación');
+    } finally {
+      setImportingCatalog(false);
     }
   };
 
@@ -472,6 +489,10 @@ export function SyncProductsView({ storeId }: SyncProductsViewProps) {
               }}
             >
               Limpiar
+            </Button>
+            <Button appearance="neutral" onClick={importFromTiendanube} disabled={importingCatalog}>
+              {importingCatalog ? <Spinner size="small" /> : <DownloadIcon />}
+              Importar productos de Tiendanube
             </Button>
           </Box>
         </Card.Body>
