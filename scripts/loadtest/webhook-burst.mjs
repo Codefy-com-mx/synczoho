@@ -8,7 +8,7 @@
 // pedidos reales (--order-ids 101,102) mezcla 80 % product/updated y 20 % order/paid. Rampa lineal
 // durante el primer 10 % de la duración y luego consulta /api/status para medir cuánto tarda el
 // worker en drenar la cola. Código de salida != 0 si no se cumplen los criterios, 2 si los
-// argumentos son inválidos. El secreto se lee del entorno (recomendado: argv es visible en ps/historial).
+// argumentos son inválidos. --no-drain omite por completo la consulta a /api/status (perfil de aceptación). El secreto se lee del entorno (recomendado: argv es visible en ps/historial).
 import { createHmac } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
@@ -33,10 +33,13 @@ export function rateAt(t, rps, duration) {
   return ramp > 0 && t < ramp ? Math.max(1, (rps * t) / ramp) : rps;
 }
 
-function parseArgs(argv) {
+/** `--opcion valor` o bandera `--opcion` (true si no hay valor o el siguiente token es otra opción). */
+export function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith("--")) out[argv[i].slice(2)] = argv[++i];
+    if (!argv[i].startsWith("--")) continue;
+    const next = argv[i + 1];
+    out[argv[i].slice(2)] = next === undefined || next.startsWith("--") ? true : (i++, next);
   }
   return out;
 }
@@ -116,7 +119,7 @@ async function measureDrain(statusUrl, startedAt) {
 }
 
 export async function run(opts) {
-  const { url, secret, rps, duration, storeId, orderIds = [] } = opts;
+  const { url, secret, rps, duration, storeId, orderIds = [], noDrain = false } = opts;
   const stats = { latencies: [], s2xx: 0, s4xx: 0, s5xx: 0, other: 0, errors: 0 };
   const inflight = new Set();
   const start = performance.now();
@@ -138,7 +141,7 @@ export async function run(opts) {
   const burstEnd = Date.now();
 
   const statusUrl = opts.statusUrl || new URL("/api/status", url).href;
-  const drain = await measureDrain(statusUrl, burstEnd);
+  const drain = noDrain ? { measured: false, skipped: true } : await measureDrain(statusUrl, burstEnd);
 
   const sorted = stats.latencies.slice().sort((a, b) => a - b);
   const p = { p50: percentile(sorted, 50), p95: percentile(sorted, 95), p99: percentile(sorted, 99) };
@@ -166,7 +169,8 @@ function report({ sent, stats, percentiles: p, drain, failures }, orderIds) {
     : "mezcla: 100 % product/updated (eventos order/paid omitidos: no se pasó --order-ids)");
   console.log(`latencia: p50 ${fmt(p.p50)} | p95 ${fmt(p.p95)} | p99 ${fmt(p.p99)}`);
   console.log(`respuestas: 2xx ${stats.s2xx} | 4xx ${stats.s4xx} | 5xx ${stats.s5xx} | otras ${stats.other} | errores de red ${stats.errors}`);
-  if (!drain.measured) console.log("drenado de cola: no medido (/api/status no disponible)");
+  if (drain.skipped) console.log("drenado de cola: omitido (--no-drain)");
+  else if (!drain.measured) console.log("drenado de cola: no medido (/api/status no disponible)");
   else if (Number.isFinite(drain.seconds)) console.log(`drenado de cola: ${drain.seconds.toFixed(0)} s tras terminar la ráfaga`);
   else console.log(`drenado de cola: NO drenó (pendientes: ${drain.pending ?? "?"})`);
   console.log(verdictLine(failures, drain));
@@ -175,7 +179,7 @@ function report({ sent, stats, percentiles: p, drain, failures }, orderIds) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const a = parseArgs(process.argv.slice(2));
   const secret = a.secret || process.env.TIENDANUBE_CLIENT_SECRET;
-  const usage = "Uso: TIENDANUBE_CLIENT_SECRET=... webhook-burst.mjs --url <receptor> [--rps 50] [--duration 600] [--store-id 1] [--order-ids 101,102] [--status-url <url>]";
+  const usage = "Uso: TIENDANUBE_CLIENT_SECRET=... webhook-burst.mjs --url <receptor> [--rps 50] [--duration 600] [--store-id 1] [--order-ids 101,102] [--status-url <url>] [--no-drain]";
   if (!a.url || !secret) {
     console.error(usage);
     process.exit(2);
@@ -202,6 +206,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     duration,
     storeId: Number(a["store-id"] ?? 1),
     orderIds,
+    noDrain: a["no-drain"] === true,
     statusUrl: a["status-url"],
   });
   report(result, orderIds);

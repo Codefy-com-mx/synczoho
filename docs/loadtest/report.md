@@ -15,8 +15,10 @@ Detalles comunes:
 
 - Cuerpo `{store_id, event, id}` con ids enteros, firmado con HMAC-SHA256 hex del cuerpo crudo en `x-linkedstore-hmac-sha256` (mismo formato que `verifyWebhookSignature`).
 - Rampa lineal durante el primer 10 % de la duración. Con los valores por defecto (50 eventos/s, 600 s) el objetivo es de ~28 500 eventos (la rampa reduce el total frente a 30 000).
-- Por defecto el mix es **100 % `product/updated`** con ids al azar (un id inexistente solo hace que el worker reciba 404 y borre una fila de caché). Los `order/paid` solo se envían si se pasan **ids de pedidos reales** con `--order-ids 101,102,...`; entonces el mix es 80 % `product/updated` y 20 % `order/paid`. Con ids de pedido inventados el worker recibe 404 al crear el pedido en Zoho, reintenta con backoff de hasta 3600 s y la cola nunca llega a 0, además de dejar miles de eventos fallando en staging. Sin `--order-ids` el script lo avisa en su salida.
-- Tras la ráfaga el script consulta `GET /api/status` cada 5 s hasta que `queue.pending` llegue a 0 y mide ese tiempo. Si `/api/status` no responde imprime "drenado de cola: no medido" y la última línea dice `RESULTADO: OK (drenado no evaluado)`. Si la cola ya tenía eventos pendientes antes de empezar, el drenado incluye ese backlog.
+- Por defecto el mix es **100 % `product/updated`** con ids al azar (un id inexistente solo hace que el worker reciba 404 y borre una fila de caché). Los `order/paid` solo se envían si se pasan **ids de pedidos reales** con `--order-ids 101,102,...`; entonces el mix es 80 % `product/updated` y 20 % `order/paid`. Con ids de pedido inventados cada evento falla (Tiendanube responde 404 al leer el pedido), se reintenta con backoff de hasta 3600 s y sigue generando errores y ruido en los logs; al llegar a 5 intentos pasa a contar como evento fallido (`queue.failed` en `/status`) y quedan miles de eventos fallando en staging. Sin `--order-ids` el script lo avisa en su salida.
+- Por defecto, tras la ráfaga el script consulta `GET /api/status` cada 5 s hasta que `queue.pending` llegue a 0 y mide ese tiempo (hasta 360 s de espera; si no llega a 0 el resultado es FALLA). Si `/api/status` no responde imprime "drenado de cola: no medido" y la última línea dice `RESULTADO: OK (drenado no evaluado)`.
+- `--no-drain` omite por completo esa consulta (imprime "drenado de cola: omitido (--no-drain)" y termina con `RESULTADO: OK (drenado no evaluado)`). Es obligatorio en el perfil de aceptación A: sin él el script esperaría el drenado de ~28 500 eventos y terminaría en FALLA por diseño.
+- `queue.pending` de `/status` cuenta solo los eventos **listos para procesar** (`processed = false` y `next_attempt_at <= now()`). Un evento que falló y espera su reintento con backoff no cuenta como pendiente, así que una lectura de 0 no significa que no haya eventos fallando: revisar también `queue.failed` y `webhook_events.error_message`. Si la cola ya tenía eventos listos antes de empezar, el drenado incluye ese backlog.
 
 ## Criterios de aprobación
 
@@ -25,7 +27,7 @@ Detalles comunes:
 | Latencia de aceptación p95 | < 500 ms | aceptación |
 | Respuestas 5xx | 0 | aceptación |
 | Respuestas 4xx / errores de red / timeouts de 10 s | 0 (criterio adicional del script: indica firma, secreto o URL incorrectos) | ambos |
-| Cola drenada tras terminar la ráfaga | < 300 s | solo perfil de drenado |
+| Cola drenada tras terminar la ráfaga | < 300 s | solo perfil de drenado (en el perfil A se omite con `--no-drain`) |
 
 El script termina con código distinto de 0 si algún criterio falla, y con 2 si los argumentos son inválidos.
 
@@ -33,14 +35,14 @@ El script termina con código distinto de 0 si algún criterio falla, y con 2 si
 
 El secreto es el client secret real de la app: pásese por la variable de entorno `TIENDANUBE_CLIENT_SECRET` y no con `--secret`, que queda visible en `ps` y en el historial del shell.
 
-**A. Perfil de aceptación** (50 eventos/s, 600 s):
+**A. Perfil de aceptación** (50 eventos/s, 600 s; `--no-drain` porque el drenado de este volumen no se evalúa):
 
 ```bash
 export TIENDANUBE_CLIENT_SECRET=...   # client secret de la app
 node scripts/loadtest/webhook-burst.mjs \
   --url https://<staging>/api/functions/v1/tiendanube-webhook \
   --store-id <store_id de una tienda de prueba desechable> \
-  --rps 50 --duration 600
+  --rps 50 --duration 600 --no-drain
 ```
 
 Advertencia: esta corrida deja en staging un backlog de ~28 500 eventos que el worker tardará horas en drenar. Ejecutarla con una **tienda de prueba desechable** y limpiar después los eventos pendientes de esa tienda:
@@ -49,7 +51,7 @@ Advertencia: esta corrida deja en staging un backlog de ~28 500 eventos que el w
 DELETE FROM webhook_events WHERE store_id = '<store_id>' AND processed = false;
 ```
 
-**B. Perfil de drenado** (~285 eventos; a ~2 eventos/s el worker tarda ~150 s, dentro del umbral de 300 s):
+**B. Perfil de drenado** (~285 eventos, sin `--no-drain`; a ~2 eventos/s el worker termina ~85 s después de acabar la ráfaga, ~150 s desde el inicio, dentro del umbral de 300 s):
 
 ```bash
 node scripts/loadtest/webhook-burst.mjs \
@@ -58,13 +60,13 @@ node scripts/loadtest/webhook-burst.mjs \
   --rps 5 --duration 60
 ```
 
-Opciones: `--url` obligatoria; `--store-id` (por defecto 1); `--order-ids` (ids reales de pedidos de esa tienda; sin ellos no se envían `order/paid`); `--status-url` (por defecto `<origen de --url>/api/status`). Node >= 18, sin dependencias. Usar una tienda de prueba instalada en staging con el catálogo importado.
+Opciones: `--url` obligatoria; `--store-id` (por defecto 1); `--order-ids` (ids reales de pedidos de esa tienda; sin ellos no se envían `order/paid`); `--status-url` (por defecto `<origen de --url>/api/status`); `--no-drain` (no consultar la cola). Node >= 18, sin dependencias. Usar una tienda de prueba instalada en staging con el catálogo importado.
 
 ## Stub de la API de Tiendanube (aislar el rate limit)
 
 La API real limita las requests por tienda, así que miles de `GET /products/{id}` medirían el rate limit de Tiendanube y no la app. `scripts/loadtest/stub-tiendanube.mjs` (`node scripts/loadtest/stub-tiendanube.mjs --port 4010 --latency 50`; escucha en 127.0.0.1, `--host 0.0.0.0` para otro equipo) responde `GET /v1/:store/products/:id`, `GET /v1/:store/locations` y `PATCH /v1/:store/products/stock-price` con 50 ms fijos; cualquier otra ruta devuelve 404.
 
-**Limitación:** `TN_API` (`server/functions/_shared/tiendanube.ts`) está fijo en `https://api.tiendanube.com/v1` y la app NO permite sobrescribirlo. Mientras no sea configurable, el stub no recibe tráfico, la prueba mide la aceptación de webhooks y el drenado del perfil B depende de la latencia real de Tiendanube. Para aislar la app hay que hacer `TN_API` configurable y apuntar el worker de staging a `http://<host>:4010/v1` (cambio pendiente, fuera de este plan).
+**Limitación:** `TN_API` (`server/functions/_shared/tiendanube.ts`) está fijo en `https://api.tiendanube.com/v1` y la app NO permite sobrescribirlo. Mientras no sea configurable, el stub no recibe tráfico, la prueba mide la aceptación de webhooks y el drenado del perfil B depende de la latencia real de Tiendanube. Para aislar la app hay que hacer `TN_API` configurable y apuntar el worker de staging a `http://<host>:4010/v1` (cambio pendiente, fuera del alcance de este informe).
 
 ## Resultados
 

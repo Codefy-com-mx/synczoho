@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import { buildEvent, parseOrderIds, signBody, validateRates, verdictLine } from "../../scripts/loadtest/webhook-burst.mjs";
+import { buildEvent, parseArgs, parseOrderIds, signBody, validateRates, verdictLine } from "../../scripts/loadtest/webhook-burst.mjs";
 import { verifyWebhookSignature } from "../../server/functions/tiendanube-webhook";
 
 describe("loadtest signBody", () => {
@@ -50,5 +53,42 @@ describe("loadtest validación y veredicto", () => {
     expect(verdictLine([], { measured: false })).toBe("RESULTADO: OK (drenado no evaluado)");
     expect(verdictLine([], { measured: true, seconds: 10 })).toBe("RESULTADO: OK");
     expect(verdictLine(["p95 alto"], { measured: false })).toMatch(/^RESULTADO: FALLA/);
+  });
+});
+
+describe("loadtest --no-drain", () => {
+  it("parseArgs trata --no-drain como bandera sin valor y no se come la siguiente opción", () => {
+    expect(parseArgs(["--url", "u", "--no-drain", "--rps", "5"])).toEqual({ url: "u", "no-drain": true, rps: "5" });
+    expect(parseArgs(["--rps", "5", "--no-drain"])).toEqual({ rps: "5", "no-drain": true });
+  });
+
+  // Se ejecuta el CLI real en un proceso Node aparte (el entorno jsdom de vitest no sirve para fetch con AbortSignal).
+  it("el CLI con --no-drain no consulta /api/status y termina con drenado no evaluado", async () => {
+    const paths: string[] = [];
+    const server = createServer((req, res) => {
+      paths.push(req.url ?? "");
+      req.resume();
+      res.end("{}");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`;
+      const out = await new Promise<{ code: number; stdout: string }>((resolve) => {
+        const child = execFile(
+          process.execPath,
+          ["scripts/loadtest/webhook-burst.mjs", "--url", url, "--rps", "5", "--duration", "1", "--no-drain"],
+          { env: { ...process.env, TIENDANUBE_CLIENT_SECRET: "s" } },
+          (err, stdout) => resolve({ code: err ? ((err as any).code ?? 1) : 0, stdout }),
+        );
+        child.on("error", () => resolve({ code: 1, stdout: "" }));
+      });
+      expect(out.stdout).toContain("drenado de cola: omitido (--no-drain)");
+      expect(out.stdout).toContain("RESULTADO: OK (drenado no evaluado)");
+      expect(out.code).toBe(0);
+      expect(paths.length).toBeGreaterThan(0);
+      expect(paths.every((p) => p === "/hook")).toBe(true);
+    } finally {
+      server.close();
+    }
   });
 });
