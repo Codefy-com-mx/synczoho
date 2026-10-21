@@ -1,5 +1,14 @@
 export function signBody(body: string, secret: string): string;
 export function percentile(sorted: number[], p: number): number;
+export function parseOrderIds(raw: string | undefined | null): number[];
+export function validateRates(rps: number, duration: number): string | null;
+export function buildEvent(
+  storeId: number,
+  orderIds: number[],
+  r?: number,
+  pick?: () => number,
+): { store_id: number; event: "product/updated" | "order/paid"; id: number };
+export function verdictLine(failures: string[], drain: { measured: boolean; seconds?: number }): string;
 export function rateAt(t: number, rps: number, duration: number): number;
 export function run(opts: {
   url: string;
@@ -7,6 +16,7 @@ export function run(opts: {
   rps: number;
   duration: number;
   storeId: number;
+  orderIds?: number[];
   statusUrl?: string;
 }): Promise<{
   sent: number;

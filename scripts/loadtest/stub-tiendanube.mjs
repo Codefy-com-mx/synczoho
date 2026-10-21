@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stub local de la API de Tiendanube con latencia fija (~50 ms) para aislar el worker del
-// rate limit real. Uso: node scripts/loadtest/stub-tiendanube.mjs [--port 4010] [--latency 50]
+// rate limit real. Uso: node scripts/loadtest/stub-tiendanube.mjs [--port 4010] [--latency 50] [--host 127.0.0.1]
 //
 // IMPORTANTE: la app NO permite sobrescribir la base de la API (TN_API está fijo en
 // server/functions/_shared/tiendanube.ts). Hasta que sea configurable, este stub no recibe
@@ -10,10 +10,12 @@ import { createServer } from "node:http";
 const argv = process.argv.slice(2);
 const opt = (name, def) => {
   const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? Number(argv[i + 1]) : def;
+  return i >= 0 ? argv[i + 1] : def;
 };
-const port = opt("port", 4010);
-const latency = opt("latency", 50);
+const port = Number(opt("port", 4010));
+const latency = Number(opt("latency", 50));
+// Solo loopback por defecto; pasar --host 0.0.0.0 para que un worker en otro equipo lo alcance.
+const host = opt("host", "127.0.0.1");
 
 const routes = [
   ["GET", /^\/v1\/(\d+)\/products\/(\d+)$/, (m) => ({
@@ -41,4 +43,4 @@ createServer((req, res) => {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ code: 404, message: "Not Found", description: "Stub" }));
   }, latency);
-}).listen(port, () => console.log(`stub Tiendanube en http://127.0.0.1:${port}/v1 (latencia ${latency} ms)`));
+}).listen(port, host, () => console.log(`stub Tiendanube en http://${host}:${port}/v1 (latencia ${latency} ms)`));

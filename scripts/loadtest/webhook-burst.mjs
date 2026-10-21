@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 // Prueba de carga del receptor de webhooks de Tiendanube (perfil Hot Sale).
 //
-//   node scripts/loadtest/webhook-burst.mjs --url https://staging/api/functions/v1/tiendanube-webhook \
-//     --secret "$TIENDANUBE_CLIENT_SECRET" --rps 50 --duration 600 --store-id 123456
+//   TIENDANUBE_CLIENT_SECRET=... node scripts/loadtest/webhook-burst.mjs \
+//     --url https://staging/api/functions/v1/tiendanube-webhook --rps 50 --duration 600 --store-id 123456
 //
-// Sin dependencias: solo Node >= 18 (fetch global). Mezcla 80 % product/updated y 20 % order/paid,
-// rampa lineal durante el primer 10 % de la duración, y luego consulta /api/status para medir
-// cuánto tarda el worker en drenar la cola. Código de salida != 0 si no se cumplen los criterios.
+// Sin dependencias: solo Node >= 18 (fetch global). Envía product/updated; solo si se pasan ids de
+// pedidos reales (--order-ids 101,102) mezcla 80 % product/updated y 20 % order/paid. Rampa lineal
+// durante el primer 10 % de la duración y luego consulta /api/status para medir cuánto tarda el
+// worker en drenar la cola. Código de salida != 0 si no se cumplen los criterios, 2 si los
+// argumentos son inválidos. El secreto se lee del entorno (recomendado: argv es visible en ps/historial).
 import { createHmac } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 const P95_LIMIT_MS = 500;
 const DRAIN_LIMIT_S = 300;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 /** HMAC-SHA256 hex del cuerpo crudo: mismo formato que `verifyWebhookSignature` del receptor. */
 export function signBody(body, secret) {
@@ -38,23 +41,45 @@ function parseArgs(argv) {
   return out;
 }
 
-let orderSeq = 1_000_000;
-function nextEvent(storeId) {
-  // ponytail: ids al azar; el receptor solo valida y encola, no consulta el recurso.
-  if (Math.random() < 0.8) {
-    return { store_id: storeId, event: "product/updated", id: 1 + Math.floor(Math.random() * 5000) };
-  }
-  return { store_id: storeId, event: "order/paid", id: orderSeq++ };
+/** Enteros separados por coma -> number[]; vacío si no se pasó la opción. Lanza si algo no es entero positivo. */
+export function parseOrderIds(raw) {
+  if (raw == null || raw === "") return [];
+  return String(raw).split(",").map((t) => {
+    const n = Number(t.trim());
+    if (!Number.isSafeInteger(n) || n <= 0) throw new Error(`--order-ids: "${t.trim()}" no es un id entero positivo`);
+    return n;
+  });
 }
 
-async function sendOne(url, secret, storeId, stats) {
-  const body = JSON.stringify(nextEvent(storeId));
+/** Mensaje de error si --rps/--duration no son números finitos > 0, o null. */
+export function validateRates(rps, duration) {
+  if (!Number.isFinite(rps) || rps <= 0) return "--rps debe ser un número finito > 0";
+  if (!Number.isFinite(duration) || duration <= 0) return "--duration debe ser un número finito > 0 (segundos)";
+  return null;
+}
+
+/**
+ * Un evento del perfil. `r` en [0,1) decide el tipo. order/paid solo si hay ids reales: con ids
+ * inventados el worker recibe 404 de Tiendanube, reintenta con backoff de hasta 1 h y la cola
+ * nunca llega a 0.
+ */
+export function buildEvent(storeId, orderIds, r = Math.random(), pick = Math.random) {
+  if (orderIds.length && r >= 0.8) {
+    return { store_id: storeId, event: "order/paid", id: orderIds[Math.floor(pick() * orderIds.length)] };
+  }
+  // ponytail: ids de producto al azar; un id inexistente solo hace que el worker borre una fila de caché.
+  return { store_id: storeId, event: "product/updated", id: 1 + Math.floor(pick() * 5000) };
+}
+
+async function sendOne(url, secret, storeId, orderIds, stats) {
+  const body = JSON.stringify(buildEvent(storeId, orderIds));
   const t0 = performance.now();
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-linkedstore-hmac-sha256": signBody(body, secret) },
       body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     await res.arrayBuffer();
     stats.latencies.push(performance.now() - t0);
@@ -91,7 +116,7 @@ async function measureDrain(statusUrl, startedAt) {
 }
 
 export async function run(opts) {
-  const { url, secret, rps, duration, storeId } = opts;
+  const { url, secret, rps, duration, storeId, orderIds = [] } = opts;
   const stats = { latencies: [], s2xx: 0, s4xx: 0, s5xx: 0, other: 0, errors: 0 };
   const inflight = new Set();
   const start = performance.now();
@@ -104,7 +129,7 @@ export async function run(opts) {
     tokens += (rateAt((now - start) / 1000, rps, duration) * (now - last)) / 1000;
     last = now;
     for (; tokens >= 1; tokens--) {
-      const p = sendOne(url, secret, storeId, stats).finally(() => inflight.delete(p));
+      const p = sendOne(url, secret, storeId, orderIds, stats).finally(() => inflight.delete(p));
       inflight.add(p);
       sent++;
     }
@@ -127,32 +152,58 @@ export async function run(opts) {
   return { sent, stats, percentiles: p, drain, failures };
 }
 
-function report({ sent, stats, percentiles: p, drain, failures }) {
+/** Última línea del informe; deja claro cuando el criterio de drenado no se pudo evaluar. */
+export function verdictLine(failures, drain) {
+  if (failures.length) return `RESULTADO: FALLA\n - ${failures.join("\n - ")}`;
+  return drain.measured ? "RESULTADO: OK" : "RESULTADO: OK (drenado no evaluado)";
+}
+
+function report({ sent, stats, percentiles: p, drain, failures }, orderIds) {
   const fmt = (n) => (Number.isFinite(n) ? `${n.toFixed(1)} ms` : "n/d");
   console.log(`enviados: ${sent}`);
+  console.log(orderIds.length
+    ? `mezcla: 80 % product/updated, 20 % order/paid (${orderIds.length} ids reales)`
+    : "mezcla: 100 % product/updated (eventos order/paid omitidos: no se pasó --order-ids)");
   console.log(`latencia: p50 ${fmt(p.p50)} | p95 ${fmt(p.p95)} | p99 ${fmt(p.p99)}`);
   console.log(`respuestas: 2xx ${stats.s2xx} | 4xx ${stats.s4xx} | 5xx ${stats.s5xx} | otras ${stats.other} | errores de red ${stats.errors}`);
   if (!drain.measured) console.log("drenado de cola: no medido (/api/status no disponible)");
   else if (Number.isFinite(drain.seconds)) console.log(`drenado de cola: ${drain.seconds.toFixed(0)} s tras terminar la ráfaga`);
   else console.log(`drenado de cola: NO drenó (pendientes: ${drain.pending ?? "?"})`);
-  console.log(failures.length ? `RESULTADO: FALLA\n - ${failures.join("\n - ")}` : "RESULTADO: OK");
+  console.log(verdictLine(failures, drain));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const a = parseArgs(process.argv.slice(2));
   const secret = a.secret || process.env.TIENDANUBE_CLIENT_SECRET;
+  const usage = "Uso: TIENDANUBE_CLIENT_SECRET=... webhook-burst.mjs --url <receptor> [--rps 50] [--duration 600] [--store-id 1] [--order-ids 101,102] [--status-url <url>]";
   if (!a.url || !secret) {
-    console.error("Uso: webhook-burst.mjs --url <receptor> --secret <client secret> [--rps 50] [--duration 600] [--store-id 1] [--status-url <url>]");
+    console.error(usage);
+    process.exit(2);
+  }
+  if (a.secret) console.error("Aviso: --secret queda en el historial y en ps; prefiera la variable TIENDANUBE_CLIENT_SECRET.");
+  const rps = Number(a.rps ?? 50);
+  const duration = Number(a.duration ?? 600);
+  const invalid = validateRates(rps, duration);
+  let orderIds;
+  try {
+    orderIds = parseOrderIds(a["order-ids"]);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(2);
+  }
+  if (invalid) {
+    console.error(`${invalid}\n${usage}`);
     process.exit(2);
   }
   const result = await run({
     url: a.url,
     secret,
-    rps: Number(a.rps ?? 50),
-    duration: Number(a.duration ?? 600),
+    rps,
+    duration,
     storeId: Number(a["store-id"] ?? 1),
+    orderIds,
     statusUrl: a["status-url"],
   });
-  report(result);
+  report(result, orderIds);
   process.exit(result.failures.length ? 1 : 0);
 }
