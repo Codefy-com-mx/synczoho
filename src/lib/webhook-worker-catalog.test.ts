@@ -73,18 +73,39 @@ describe("processEvent catálogo", () => {
 
 describe("onEventFailure", () => {
   it.each(["product/updated", "category/deleted", "internal/backfill"])(
-    "%s con 5 intentos marca stale, loguea y alerta", async (type) => {
+    "%s con 5 intentos y UPDATE que cambia fila: marca stale, loguea y alerta una vez", async (type) => {
       await onEventFailure(row(type, {}, 5), "boom");
-      expect(m.query).toHaveBeenCalledWith(expect.stringContaining("catalog_status='stale'"), ["1"]);
+      expect(m.query).toHaveBeenCalledOnce();
+      expect(m.query).toHaveBeenCalledWith(
+        expect.stringMatching(/catalog_status='stale' WHERE store_id=\$1 AND catalog_status <> 'stale'/), ["1"]);
+      expect(m.logSync).toHaveBeenCalledOnce();
       expect(m.logSync).toHaveBeenCalledWith({}, "1", expect.objectContaining({ operation: "catalog_webhook", status: "error" }));
+      expect(m.sendAlert).toHaveBeenCalledOnce();
       const body = JSON.parse(await (m.sendAlert.mock.calls[0][0] as Request).text());
       expect(body).toEqual({ storeId: "1", operation: "catalog_webhook", errorMessage: expect.stringContaining("boom") });
     });
 
-  it("no marca stale con menos de 5 intentos ni en eventos que no son de catálogo", async () => {
+  it("con la tienda ya stale (rowCount 0) hace el UPDATE pero no loguea ni alerta", async () => {
+    m.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    await onEventFailure(row("product/updated", {}, 6), "boom");
+    expect(m.query).toHaveBeenCalledOnce();
+    expect(m.logSync).not.toHaveBeenCalled();
+    expect(m.sendAlert).not.toHaveBeenCalled();
+  });
+
+  it("no hace nada con menos de 5 intentos ni en eventos que no son de catálogo", async () => {
     await onEventFailure(row("product/updated", {}, 4), "boom");
     await onEventFailure(row("order/paid", {}, 9), "boom");
     expect(m.query).not.toHaveBeenCalled();
+    expect(m.logSync).not.toHaveBeenCalled();
     expect(m.sendAlert).not.toHaveBeenCalled();
+  });
+
+  it("registra console.error si el handler de alerta responde no-ok", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    m.sendAlert.mockResolvedValue(new Response("{}", { status: 500 }));
+    await onEventFailure(row("internal/backfill", {}, 5), "boom");
+    expect(err).toHaveBeenCalledWith("Catalog alert email failed", "1", 500);
+    err.mockRestore();
   });
 });

@@ -194,12 +194,17 @@ export async function onEventFailure(row: EventRow, message: string): Promise<vo
     || row.event_type === "internal/backfill";
   if (!isCatalog || row.attempts < MAX_CATALOG_ATTEMPTS) return;
   const errorMessage = `${row.event_type}: ${message}`;
-  await getPool().query("UPDATE stores SET catalog_status='stale' WHERE store_id=$1", [row.store_id]);
+  // El UPDATE condicional es la compuerta de dedupe: solo la primera falla tras un catálogo 'ready' alerta.
+  const stale = await getPool().query(
+    "UPDATE stores SET catalog_status='stale' WHERE store_id=$1 AND catalog_status <> 'stale'", [row.store_id],
+  );
+  if (!stale.rowCount) return;
   await logSync(getAdminClient(), row.store_id, { operation: "catalog_webhook", status: "error", message: errorMessage });
-  await sendAlertEmail(new Request("http://internal/functions", {
+  const alert = await sendAlertEmail(new Request("http://internal/functions", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ storeId: row.store_id, operation: "catalog_webhook", errorMessage }),
   }));
+  if (!alert.ok) console.error("Catalog alert email failed", row.store_id, alert.status);
 }
 
 let running = false;
