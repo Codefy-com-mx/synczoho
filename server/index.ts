@@ -8,6 +8,8 @@ import { resyncAllStores } from "./functions/_shared/catalog-bootstrap.js";
 import { applySecurityHeaders } from "./security-headers.js";
 import { authorizeFunction } from "./auth.js";
 import { runWebhookWorker } from "./webhook-worker.js";
+import { getStatus, statusHttpCode } from "./status.js";
+import { renderStatusPage } from "./status-page.js";
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
@@ -140,6 +142,33 @@ const server = createServer(async (request, response) => {
       console.error("Health check failed", error);
       sendJson(response, 503, { status: "unavailable" });
     }
+    return;
+  }
+
+  // Público por diseño: solo agregados, sin datos de tiendas.
+  if (url.pathname === "/api/status" || url.pathname === "/status") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.setHeader("Allow", "GET, HEAD");
+      sendJson(response, 405, { error: "Method not allowed" });
+      return;
+    }
+    response.setHeader("Cache-Control", "no-store");
+    if (url.pathname === "/status") {
+      applySecurityHeaders(response);
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(request.method === "HEAD" ? undefined : renderStatusPage());
+      return;
+    }
+    let report: Awaited<ReturnType<typeof getStatus>> | { status: "down" };
+    try {
+      report = await getStatus();
+    } catch (error) {
+      console.error("Status check failed", error instanceof Error ? error.name : "unknown");
+      report = { status: "down" };
+    }
+    applySecurityHeaders(response);
+    response.writeHead(statusHttpCode(report.status), { "Content-Type": "application/json; charset=utf-8" });
+    response.end(request.method === "HEAD" ? undefined : JSON.stringify(report));
     return;
   }
 
