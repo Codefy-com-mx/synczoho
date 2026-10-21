@@ -14,7 +14,7 @@ import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings, type LocationMappin
 import { deriveTnLocationCount, resolveInitialLevels } from "../_shared/stock-plan.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
-type StockCtx = { mappings: LocationMapping[]; tnLocationCount: number | null };
+type StockCtx = { mappings: LocationMapping[]; tnLocations: unknown[] | null; tnLocationCount: number | null };
 type TnImage = { attachment: string; filename: string; position?: number };
 
 interface ImportRequest {
@@ -111,9 +111,11 @@ export default serve(async (req) => {
     // Mapeos de locations y cantidad de locations de TN: una vez por request (no por ítem).
     const needsStock = F.stock && items.some((i) => i.action !== "link");
     const mappings = needsStock ? await loadLocationMappings(storeId) : [];
+    const tnLocations = needsStock ? await fetchTnLocations(store) : null;
     const stockCtx: StockCtx = {
       mappings,
-      tnLocationCount: needsStock ? deriveTnLocationCount(await fetchTnLocations(store), mappings, []) : null,
+      tnLocations,
+      tnLocationCount: needsStock ? deriveTnLocationCount(tnLocations, mappings, []) : null,
     };
     const needZohoLocations = needsStock && mappings.some((m) => m.zoho_location_id && m.zoho_location_id !== ZOHO_TOTAL);
 
@@ -205,13 +207,19 @@ export default serve(async (req) => {
               const updated = await resp.json();
               if (!resp.ok) throw new Error(tnErr(updated, resp.status));
             }
-            // Sincronizar variantes: actualizar las que matchean por SKU
-            warnings.push(...await syncVariantsUpdate(store, tnProductId, product, F, stockCtx));
-
+            // Imágenes antes que stock/precio: si este último falla, ya quedaron subidas.
             if (F.images) {
               const imgs = await fetchProductImages(admin, conn, product);
               const failedImages = await uploadImages(admin, storeId, store, tnProductId, product.sync_key, imgs);
               if (failedImages > 0) warnings.push(`${failedImages} imagen(es) no se pudieron subir`);
+            }
+            // Sincronizar variantes: actualizar las que matchean por SKU
+            try {
+              warnings.push(...await syncVariantsUpdate(admin, storeId, store, tnProductId, product, F, stockCtx));
+            } catch (e) {
+              const applied = [Object.keys(payload).length > 0 ? "nombre/descripción" : null, F.images ? "imágenes" : null].filter(Boolean);
+              const detail = e instanceof Error ? e.message : "error";
+              throw new Error(`${applied.length > 0 ? `${applied.join(" e ")} actualizados; ` : ""}falló stock/precio: ${detail}`);
             }
           }
         } else if (entry.action === "link") {
@@ -347,10 +355,15 @@ async function loadZohoProduct(
     // El detalle del grupo suele no traer stock por almacén: solo si hay vínculos reales se pide por hijo.
     if (needLocations) {
       for (const it of itemsRaw) {
-        if (Array.isArray(it.locations)) continue;
-        const ri = await zohoFetch(admin, conn, `/inventory/v1/items/${it.item_id}`);
-        const ji = await ri.json().catch(() => null);
-        if (ri.ok && Array.isArray(ji?.item?.locations)) it.locations = ji.item.locations;
+        if (Array.isArray(it.locations) && it.locations.length > 0) continue;
+        // Un fallo (429/5xx/red) deja al hijo sin lista: el stock no se envía, pero el grupo sigue.
+        try {
+          const ri = await zohoFetch(admin, conn, `/inventory/v1/items/${it.item_id}`);
+          const ji = ri.ok ? await ri.json().catch(() => null) : null;
+          if (Array.isArray(ji?.item?.locations)) it.locations = ji.item.locations;
+        } catch (e) {
+          console.error("zoho item locations error", it.item_id, e);
+        }
       }
     }
 
@@ -503,6 +516,8 @@ function buildCreatePayload(
 // Para update: matchea variantes TN existentes por SKU y manda precio/stock por
 // PATCH /products/stock-price (nunca PUT de variante con stock). Devuelve avisos.
 async function syncVariantsUpdate(
+  admin: any,
+  storeId: string,
   store: { store_id: string; access_token: string; store_name: string | null },
   tnProductId: number,
   p: ZohoProductData,
@@ -517,33 +532,50 @@ async function syncVariantsUpdate(
   const tnVariants: any[] = await r.json();
   const norm = (s: any) => (s ?? "").toString().trim().toUpperCase();
   const bySku = new Map<string, any>();
+  const dupSkus = new Set<string>();
   for (const tv of tnVariants) {
-    if (tv.sku) bySku.set(norm(tv.sku), tv);
+    if (!tv.sku) continue;
+    const key = norm(tv.sku);
+    if (bySku.has(key)) dupSkus.add(key);
+    bySku.set(key, tv); // la última gana (comportamiento existente)
   }
+  // Las variantes del producto revelan si hay varias locations aunque falle GET /locations.
+  const ctx: StockCtx = {
+    ...stockCtx,
+    tnLocationCount: deriveTnLocationCount(stockCtx.tnLocations, stockCtx.mappings, tnVariants.map((tv) => ({
+      inventory_levels: Array.isArray(tv.inventory_levels) ? tv.inventory_levels : [],
+    })) as any),
+  };
 
-  const variants: Array<Record<string, unknown>> = [];
+  const byVariantId = new Map<number, Record<string, unknown>>();
   for (const v of p.variants) {
     if (!v.sku) continue;
     const tv = bySku.get(norm(v.sku));
     if (!tv) continue;
+    if (dupSkus.delete(norm(v.sku))) {
+      await logSync(admin, storeId, {
+        operation: "import_update", zoho_item_id: p.sync_key, tiendanube_product_id: tnProductId,
+        status: "skipped", message: `SKU duplicado: ${v.sku}`,
+      });
+    }
     const body: Record<string, unknown> = { id: tv.id };
     if (F.price) {
       body.price = String(v.rate ?? 0);
       if (v.sales_rate != null) body.promotional_price = String(v.sales_rate);
     }
     if (F.stock) {
-      const { levels, warning } = levelsFor(v, stockCtx);
+      const { levels, warning } = levelsFor(v, ctx);
       if (levels.length > 0) body.inventory_levels = levels;
       if (warning) warnings.push(`${warning}: el stock no se envió`);
     }
-    if (Object.keys(body).length > 1) variants.push(body);
+    if (Object.keys(body).length > 1) byVariantId.set(tv.id, body); // un solo id por request (última gana)
   }
-  for (const chunk of chunkStockPriceBatch([{ id: tnProductId, variants }])) {
+  for (const chunk of chunkStockPriceBatch([{ id: tnProductId, variants: [...byVariantId.values()] }])) {
     const resp = await tnFetchWithRetry(store, "/products/stock-price", {
       method: "PATCH",
       body: JSON.stringify(chunk),
     });
-    if (!resp.ok) throw new Error(tnErr(await resp.json().catch(() => null), resp.status));
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${tnErr(await resp.json().catch(() => null), resp.status)}`);
   }
   return [...new Set(warnings)];
 }

@@ -1,9 +1,10 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
-const { tnFetch, logSync, locs } = vi.hoisted(() => ({
+const { tnFetch, logSync, locs, zoho } = vi.hoisted(() => ({
   tnFetch: vi.fn(),
   logSync: vi.fn(async () => {}),
   locs: { mappings: [] as any[], tn: null as any[] | null },
+  zoho: { groupItems: null as any[] | null, child: {} as Record<string, () => Response>, childCalls: [] as string[] },
 }));
 
 vi.mock('../../server/functions/_shared/tiendanube.js', () => ({ tnFetchWithRetry: tnFetch }));
@@ -28,12 +29,12 @@ vi.mock('../../server/functions/_shared/zoho.js', () => {
     zohoFetch: async (_a: unknown, _c: unknown, path: string) => path.includes('/itemgroups/')
       ? Response.json({ item_group: {
           group_name: 'Grupo', image_name: 'g.jpg', attribute_name1: 'Talle',
-          items: [
+          items: zoho.groupItems ?? [
             { item_id: 'c1', name: 'C1', sku: 'C-1', rate: 10, stock_on_hand: 5, attribute_option_name1: 'S' },
             { item_id: 'c2', name: 'C2', sku: 'C-2', rate: 10, stock_on_hand: 6, attribute_option_name1: 'M' },
           ],
         } })
-      : Response.json({ item: {
+      : (zoho.childCalls.push(path), zoho.child[path]?.()) ?? Response.json({ item: {
           item_id: 'zoho-1', name: 'Test', category_name: 'Categoria one',
           sku: 'TEST-1', rate: 200, stock_on_hand: 20,
           locations: [{ location_id: 'ZL1', location_stock_on_hand: 8 }, { location_id: 'ZL2', location_stock_on_hand: 12 }],
@@ -49,6 +50,9 @@ beforeEach(() => {
   logSync.mockClear();
   locs.mappings = [];
   locs.tn = null;
+  zoho.groupItems = null;
+  zoho.child = {};
+  zoho.childCalls = [];
   vi.unstubAllGlobals();
 });
 
@@ -64,12 +68,15 @@ const calls = () => tnFetch.mock.calls.map(([, path, init]) => ({
   body: (init as RequestInit | undefined)?.body ? JSON.parse(String((init as RequestInit).body)) : undefined,
 }));
 const stubImage = (ok = true) => vi.stubGlobal('fetch', async () => ok ? new Response(new Uint8Array([1, 2, 3])) : new Response('x', { status: 404 }));
+let tnVariants: any[] = [{ id: 9, sku: 'test-1' }];
+let stockPriceStatus = 200;
+beforeEach(() => { tnVariants = [{ id: 9, sku: 'test-1' }]; stockPriceStatus = 200; });
 const tnProducts = (imageStatus = 201) => tnFetch.mockImplementation(async (_s, path: string) => {
   if (path === '/products') return Response.json({ id: 456 }, { status: 201 });
   if (path === '/products/456/images') return Response.json(imageStatus === 201 ? { id: 1 } : { message: 'bad' }, { status: imageStatus });
-  if (path === '/products/456/variants') return Response.json([{ id: 9, sku: 'test-1' }]);
+  if (path === '/products/456/variants') return Response.json(tnVariants);
   if (path === '/products/456') return Response.json({ id: 456 });
-  if (path === '/products/stock-price') return Response.json({}, { status: 200 });
+  if (path === '/products/stock-price') return Response.json({ message: 'boom' }, { status: stockPriceStatus });
   throw new Error(`Unexpected Tiendanube request: ${path}`);
 });
 
@@ -193,4 +200,115 @@ test('update con 2 locations sin mapear: manda solo el precio y avisa', async ()
   const result = await run({ items: [{ zoho_item_id: 'zoho-1', action: 'update', tiendanube_product_id: 456 }] });
   expect(result.message).toContain('locations sin mapear');
   expect(calls().find((c) => c.path === '/products/stock-price')!.body[0].variants[0]).toEqual({ id: 9, price: '200' });
+});
+
+const link = { tn_location_id: 'L1', zoho_location_id: 'ZL1' };
+const updateEntry = { zoho_item_id: 'zoho-1', action: 'update', tiendanube_product_id: 456 };
+const stockPatches = () => calls().filter((c) => c.path === '/products/stock-price');
+
+test('update con vínculo real: inventory_levels con location_id explícito por location vinculada', async () => {
+  tnProducts();
+  locs.tn = [{ id: 'L1' }, { id: 'L2' }];
+  locs.mappings = [link, { tn_location_id: 'L2', zoho_location_id: 'ZL2' }];
+  await run({ items: [updateEntry] });
+  expect(stockPatches()[0].body).toEqual([{ id: 456, variants: [{
+    id: 9, price: '200', inventory_levels: [{ location_id: 'L1', stock: 8 }, { location_id: 'L2', stock: 12 }],
+  }] }]);
+});
+
+test('vínculo real y Zoho sin locations (item simple): no se envía stock (ni 0) pero sí el precio', async () => {
+  tnProducts();
+  zoho.child['/inventory/v1/items/zoho-1'] = () => Response.json({ item: { item_id: 'zoho-1', name: 'T', sku: 'TEST-1', rate: 200, stock_on_hand: 20 } });
+  locs.tn = [{ id: 'L1' }];
+  locs.mappings = [link];
+  const result = await run({ items: [updateEntry] });
+  expect(result.message).toContain('stock por almacén no disponible: el stock no se envió');
+  expect(stockPatches()[0].body[0].variants[0]).toEqual({ id: 9, price: '200' });
+});
+
+test('vínculo real y locations vacío: no se envía inventory_levels', async () => {
+  tnProducts();
+  zoho.child['/inventory/v1/items/zoho-1'] = () => Response.json({ item: { item_id: 'zoho-1', name: 'T', sku: 'TEST-1', rate: 200, locations: [] } });
+  locs.tn = [{ id: 'L1' }];
+  locs.mappings = [link];
+  await run({ items: [updateEntry] });
+  expect(JSON.stringify(stockPatches())).not.toContain('inventory_levels');
+});
+
+test('grupo con vínculo real: un GET por hijo; el hijo con 429 no manda stock y no aborta el grupo', async () => {
+  tnProducts();
+  tnVariants = [{ id: 9, sku: 'c-1' }, { id: 10, sku: 'c-2' }];
+  zoho.child['/inventory/v1/items/c1'] = () => Response.json({ item: { locations: [{ location_id: 'ZL1', location_stock_on_hand: 3 }] } });
+  zoho.child['/inventory/v1/items/c2'] = () => Response.json({ message: 'rate' }, { status: 429 });
+  locs.tn = [{ id: 'L1' }];
+  locs.mappings = [link];
+  const result = await run({ items: [{ ...updateEntry, zoho_item_id: 'group:g1' }] });
+  expect(result.status).toBe('success');
+  expect(zoho.childCalls).toEqual(['/inventory/v1/items/c1', '/inventory/v1/items/c2']);
+  expect(stockPatches()[0].body[0].variants).toEqual([
+    { id: 9, price: '10', inventory_levels: [{ location_id: 'L1', stock: 3 }] },
+    { id: 10, price: '10' },
+  ]);
+  expect(JSON.stringify(stockPatches())).not.toContain('"stock":0');
+});
+
+test('grupo sin vínculo real: no se consulta el detalle de los hijos', async () => {
+  tnProducts();
+  tnVariants = [{ id: 9, sku: 'c-1' }, { id: 10, sku: 'c-2' }];
+  locs.tn = [{ id: 'L1' }];
+  await run({ items: [{ ...updateEntry, zoho_item_id: 'group:g1' }] });
+  expect(zoho.childCalls).toEqual([]);
+});
+
+test('update: falla /locations pero las variantes de TN muestran 2 locations -> locations sin mapear, sin legado', async () => {
+  tnProducts();
+  locs.tn = null;
+  tnVariants = [{ id: 9, sku: 'test-1', inventory_levels: [{ location_id: 'L1', stock: 1 }, { location_id: 'L2', stock: 2 }] }];
+  const result = await run({ items: [updateEntry] });
+  expect(result.message).toContain('locations sin mapear: el stock no se envió');
+  expect(stockPatches()[0].body[0].variants[0]).toEqual({ id: 9, price: '200' });
+});
+
+test('PATCH con más de 50 variantes se reparte en varios requests', async () => {
+  tnProducts();
+  zoho.groupItems = Array.from({ length: 60 }, (_, i) => ({ item_id: `c${i}`, name: `C${i}`, sku: `S-${i}`, rate: 10, stock_on_hand: 1 }));
+  tnVariants = zoho.groupItems.map((it, i) => ({ id: 1000 + i, sku: it.sku.toLowerCase() }));
+  locs.tn = [{ id: 'L1' }];
+  await run({ items: [{ ...updateEntry, zoho_item_id: 'group:g1' }] });
+  const patches = stockPatches();
+  expect(patches).toHaveLength(2);
+  expect(patches.map((c) => c.body.reduce((n: number, p: any) => n + p.variants.length, 0))).toEqual([50, 10]);
+});
+
+test('dos ítems de Zoho sobre la misma variante de TN: un solo id por request (la última gana)', async () => {
+  tnProducts();
+  zoho.groupItems = [
+    { item_id: 'c1', name: 'C1', sku: 'TEST-1', rate: 10, stock_on_hand: 1 },
+    { item_id: 'c2', name: 'C2', sku: 'test-1', rate: 99, stock_on_hand: 2 },
+  ];
+  locs.tn = [{ id: 'L1' }];
+  await run({ items: [{ ...updateEntry, zoho_item_id: 'group:g1' }] });
+  expect(stockPatches()[0].body[0].variants).toEqual([{ id: 9, price: '99', inventory_levels: [{ stock: 2 }] }]);
+});
+
+test('SKU duplicado en TN: se actualiza una sola y se avisa una vez en sync_logs', async () => {
+  tnProducts();
+  tnVariants = [{ id: 9, sku: 'test-1' }, { id: 11, sku: 'TEST-1' }];
+  locs.tn = [{ id: 'L1' }];
+  await run({ items: [updateEntry] });
+  expect(stockPatches()[0].body[0].variants.map((v: any) => v.id)).toEqual([11]);
+  expect(logSync.mock.calls.filter(([, , f]: any) => String(f.message).startsWith('SKU duplicado'))).toHaveLength(1);
+});
+
+test('PATCH stock-price falla: el ítem es error con lo aplicado y las imágenes ya se subieron', async () => {
+  tnProducts();
+  stubImage();
+  stockPriceStatus = 422;
+  locs.tn = [{ id: 'L1' }];
+  const result = await run({ items: [updateEntry], fields: { images: true } });
+  expect(result.status).toBe('error');
+  expect(result.message).toContain('nombre/descripción e imágenes actualizados; falló stock/precio: HTTP 422');
+  const all = calls();
+  expect(all.filter((c) => c.path === '/products/456/images')).toHaveLength(1);
+  expect(all.findIndex((c) => c.path === '/products/456/images')).toBeLessThan(all.findIndex((c) => c.path === '/products/stock-price'));
 });

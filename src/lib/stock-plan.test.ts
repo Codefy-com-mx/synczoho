@@ -235,9 +235,14 @@ describe("resolveInitialLevels", () => {
     });
     expect(r).toEqual({ levels: [{ location_id: "L1", stock: 7 }, { location_id: "L2", stock: 0 }] });
   });
-  it("linked real mapping without zoho locations data: 0", () => {
-    expect(resolveInitialLevels({ total: 5, mappings: [mapping("L1", "Z1")], tnLocationCount: 1 }).levels)
-      .toEqual([{ location_id: "L1", stock: 0 }]);
+  it.each([[undefined], [[]]])("linked real mapping with zohoLocations %j: nothing sent (never assume 0)", (zohoLocations) => {
+    expect(resolveInitialLevels({ total: 5, zohoLocations, mappings: [mapping("L1", "Z1")], tnLocationCount: 1 }))
+      .toEqual({ levels: [], warning: "stock por almacén no disponible" });
+  });
+  it("location absent from a NON-empty received list: 0", () => {
+    expect(resolveInitialLevels({
+      total: 5, zohoLocations: [{ location_id: "Z2", stock: 4 }], mappings: [mapping("L1", "Z1")], tnLocationCount: 1,
+    }).levels).toEqual([{ location_id: "L1", stock: 0 }]);
   });
   it("ZOHO_TOTAL mapping: one level with the total on that TN location", () => {
     expect(resolveInitialLevels({

@@ -158,6 +158,8 @@ export function resolveInitialLevels(input: {
     if ((input.tnLocationCount ?? 0) >= 2) return { levels: [], warning: "locations sin mapear" };
     return { levels: [{ stock: qty(input.total) }] };
   }
+  // Sin lista por almacén recibida (o vacía) no se sabe cuánto hay: nunca se asume 0 sobre una tienda en vivo.
+  if (!hasTotal && !input.zohoLocations?.length) return { levels: [], warning: "stock por almacén no disponible" };
   return {
     levels: linked.map((m) => ({
       location_id: m.tn_location_id,
