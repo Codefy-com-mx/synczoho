@@ -11,7 +11,7 @@ import {
   logSync,
 } from "../_shared/zoho.js";
 import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
-import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
+import { enqueueBackfill, getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
 const EPSILON = 0.01; // diferencia mínima para considerar que el precio cambió
@@ -69,6 +69,8 @@ export default serve(async (req) => {
 
     // Sin catálogo local todavía no hay contra qué comparar: neutro, sin tocar Zoho ni Tiendanube.
     if ((await getCatalogStatus(storeId)) === "pending") {
+      // Idempotente: si el encolado de la instalación falló, sin esto la tienda quedaría 'pending' para siempre.
+      await enqueueBackfill(storeId).catch((e) => console.error(`[sync-prices-run] enqueueBackfill falló`, storeId, e));
       return json({ skipped: true, reason: "catalog_not_ready" });
     }
 

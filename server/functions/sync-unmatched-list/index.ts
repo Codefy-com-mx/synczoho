@@ -7,7 +7,7 @@ import {
   getZohoConnection,
   zohoFetch,
 } from "../_shared/zoho.js";
-import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
+import { enqueueBackfill, getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 
 function norm(s: unknown) {
   return (s ?? "").toString().trim().toUpperCase();
@@ -28,6 +28,8 @@ export default serve(async (req) => {
     if (!storeId) return json({ error: "storeId requerido" }, 400);
 
     if ((await getCatalogStatus(storeId)) === "pending") {
+      // Idempotente: si el encolado de la instalación falló, sin esto la tienda quedaría 'pending' para siempre.
+      await enqueueBackfill(storeId).catch((e) => console.error(`[sync-unmatched-list] enqueueBackfill falló`, storeId, e));
       return json({ skipped: true, reason: "catalog_not_ready" });
     }
 

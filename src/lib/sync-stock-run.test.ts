@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RELEASE_SYNC_LOCK_SQL, TRY_SYNC_LOCK_SQL, syncLockKey } from "../../server/sync-lock";
 
 const h = vi.hoisted(() => ({
+  enqueueBackfill: vi.fn(),
   pool: null as any,
   lockPoolRequests: 0,
   settings: null as any,
@@ -103,6 +104,7 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
 
 vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
   getCatalogStatus: async () => h.catalogStatus,
+  enqueueBackfill: h.enqueueBackfill,
   loadCatalog: async () => {
     h.events.push("catalog:load");
     return h.catalog;
@@ -180,6 +182,7 @@ async function runHandler(
 }
 
 beforeEach(() => {
+  h.enqueueBackfill.mockReset().mockResolvedValue(true);
   pool = new FakeLockPool();
   h.pool = pool;
   h.lockPoolRequests = 0;
@@ -447,6 +450,30 @@ describe("sync-stock-run per location", () => {
     expect(h.stockPriceBodies).toHaveLength(0);
     expect(h.adjustments).toHaveLength(1);
     expect(h.adjustments[0].line_items).toEqual([{ item_id: "z-1", quantity_adjusted: -2, location_id: "ZA" }]);
+  });
+
+  it("pending ensures a backfill is queued and keeps the skip response", async () => {
+    h.catalogStatus = "pending";
+    const { payload } = await runHandler({});
+    expect(payload).toEqual({ skipped: true, reason: "catalog_not_ready" });
+    expect(h.enqueueBackfill).toHaveBeenCalledOnce();
+    expect(h.enqueueBackfill).toHaveBeenCalledWith("store-1");
+  });
+
+  it("a failing backfill enqueue does not change the skip response", async () => {
+    h.catalogStatus = "pending";
+    h.enqueueBackfill.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { response, payload } = await runHandler({});
+    err.mockRestore();
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ skipped: true, reason: "catalog_not_ready" });
+  });
+
+  it.each(["ready", "stale"] as const)("%s catalog does not enqueue a backfill", async (status) => {
+    h.catalogStatus = status;
+    await runHandler({});
+    expect(h.enqueueBackfill).not.toHaveBeenCalled();
   });
 
   it("skips with catalog_not_ready before any network call, dry runs included", async () => {

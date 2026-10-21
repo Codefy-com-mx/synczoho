@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
+  enqueueBackfill: vi.fn(),
   zohoItems: [] as any[],
   catalog: [] as any[],
   catalogStatus: "ready" as "pending" | "ready" | "stale",
@@ -28,6 +29,7 @@ vi.mock("../../server/functions/_shared/tiendanube.js", () => ({
 
 vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
   getCatalogStatus: async () => h.catalogStatus,
+  enqueueBackfill: h.enqueueBackfill,
   loadCatalog: async () => h.catalog,
 }));
 
@@ -44,6 +46,7 @@ async function runHandler() {
 }
 
 beforeEach(() => {
+  h.enqueueBackfill.mockReset().mockResolvedValue(true);
   h.zohoItems = [
     { item_id: "z-1", name: "Both", sku: "sku-1", rate: 10, stock_on_hand: 3 },
     { item_id: "z-2", name: "Only Zoho", sku: "SKU-2", rate: 5, stock_on_hand: 1 },
@@ -76,6 +79,30 @@ describe("sync-unmatched-list", () => {
     expect(payload.tn_only.items).toEqual([
       { product_id: 11, product_name: "", variant_id: 110, sku: "SKU-3", price: 7, stock: 6 },
     ]);
+  });
+
+  it("pending ensures a backfill is queued and keeps the skip response", async () => {
+    h.catalogStatus = "pending";
+    const { payload } = await runHandler();
+    expect(payload).toEqual({ skipped: true, reason: "catalog_not_ready" });
+    expect(h.enqueueBackfill).toHaveBeenCalledOnce();
+    expect(h.enqueueBackfill).toHaveBeenCalledWith("store-1");
+  });
+
+  it("a failing backfill enqueue does not change the skip response", async () => {
+    h.catalogStatus = "pending";
+    h.enqueueBackfill.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { response, payload } = await runHandler();
+    err.mockRestore();
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ skipped: true, reason: "catalog_not_ready" });
+  });
+
+  it.each(["ready", "stale"] as const)("%s catalog does not enqueue a backfill", async (status) => {
+    h.catalogStatus = status;
+    await runHandler();
+    expect(h.enqueueBackfill).not.toHaveBeenCalled();
   });
 
   it("skips with catalog_not_ready without calling Zoho or Tiendanube", async () => {

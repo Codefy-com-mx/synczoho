@@ -20,7 +20,7 @@ import {
 } from "../_shared/zoho.js";
 import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
-import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
+import { enqueueBackfill, getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings } from "../_shared/locations.js";
 import { buildStockPatch, deriveTnLocationCount, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
 import { logRetryObserver } from "../_shared/tn-observer.js";
@@ -54,6 +54,8 @@ export default serve(async (req) => {
 
     // Sin catálogo local todavía no hay contra qué comparar: neutro, sin tocar Zoho ni Tiendanube.
     if ((await getCatalogStatus(storeId)) === "pending") {
+      // Idempotente: si el encolado de la instalación falló, sin esto la tienda quedaría 'pending' para siempre.
+      await enqueueBackfill(storeId).catch((e) => console.error(`[sync-stock-run] enqueueBackfill falló`, storeId, e));
       return json({ skipped: true, reason: "catalog_not_ready" });
     }
 
