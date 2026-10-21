@@ -71,9 +71,12 @@ export async function refreshProduct(store: TiendanubeStore, productId: number):
   }
   if (!resp.ok) throw new Error(`Tiendanube API ${resp.status} al leer producto ${productId}`);
   const variants = toCatalogVariants(await resp.json());
-  // ponytail: delete + upsert sin transacción; una caída entre ambos se corrige con el siguiente webhook/backfill.
-  await deleteProduct(store.store_id, productId);
+  // Upsert primero y podar después: el producto nunca queda sin filas para un lector concurrente.
   await upsertVariants(store.store_id, variants);
+  await getPool().query(
+    "DELETE FROM tn_variants WHERE store_id = $1 AND product_id = $2 AND NOT (variant_id = ANY($3::bigint[]))",
+    [store.store_id, productId, variants.map((v) => v.variant_id)],
+  );
   return "updated";
 }
 

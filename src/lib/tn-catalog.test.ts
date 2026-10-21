@@ -64,17 +64,40 @@ describe("refreshProduct", () => {
     expect(sqls().some((s) => s.includes("INSERT INTO tn_variants"))).toBe(false);
   });
 
-  it("200 -> reemplaza (delete + upsert) y devuelve updated", async () => {
+  it("200 -> upsert primero y luego poda; devuelve updated", async () => {
     const fetchMock = vi.fn(async () => Response.json(product(9)));
     vi.stubGlobal("fetch", fetchMock);
     expect(await refreshProduct(store, 9)).toBe("updated");
     const s = sqls();
-    const del = s.findIndex((x) => x.includes("DELETE FROM tn_variants"));
     const ins = s.findIndex((x) => x.includes("INSERT INTO tn_variants"));
-    expect(del).toBeGreaterThanOrEqual(0);
-    expect(ins).toBeGreaterThan(del);
+    const del = s.findIndex((x) => x.includes("DELETE FROM tn_variants"));
+    expect(ins).toBeGreaterThanOrEqual(0);
+    expect(del).toBeGreaterThan(ins);
     expect(s[ins]).toContain("ON CONFLICT (store_id, variant_id)");
     expect(String((fetchMock.mock.calls[0] as any)[0])).toContain("/products/9?fields=id,variants");
+  });
+
+  it("poda solo variantes ausentes y nunca antes del upsert", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      id: 9,
+      variants: [{ id: 91, sku: "A", price: "1" }, { id: 92, sku: "B", price: "1" }],
+    })));
+    await refreshProduct(store, 9);
+    const del = h.queries.filter((q) => q.text.includes("DELETE FROM tn_variants"));
+    expect(del).toHaveLength(1);
+    expect(del[0].text).toContain("NOT (variant_id = ANY($3::bigint[]))");
+    expect(del[0].values).toEqual(["s1", 9, [91, 92]]);
+    expect(h.queries.findIndex((q) => q === del[0])).toBeGreaterThan(
+      h.queries.findIndex((q) => q.text.includes("INSERT INTO tn_variants")),
+    );
+  });
+
+  it("sin variantes con SKU: omite el upsert y poda todo el producto", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ id: 9, variants: [{ id: 91, sku: "", price: "1" }] })));
+    await refreshProduct(store, 9);
+    expect(sqls().some((x) => x.includes("INSERT INTO tn_variants"))).toBe(false);
+    const del = h.queries.find((q) => q.text.includes("DELETE FROM tn_variants"))!;
+    expect(del.values[2]).toEqual([]);
   });
 });
 
