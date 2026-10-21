@@ -33,7 +33,9 @@ export default serve(async (req) => {
   const storeId = String(payload.store_id ?? "");
   if (!/^[0-9]+$/.test(storeId) || typeof event !== "string" ||
       (privacyEvents[name] && payload.event && payload.event !== event) ||
-      (event.startsWith("order/") && !Number.isSafeInteger(Number(payload.id)))) {
+      (event.startsWith("order/") && !Number.isSafeInteger(Number(payload.id))) ||
+      ((event.startsWith("product/") || event.startsWith("category/")) && !Number.isSafeInteger(payload.id)) ||
+      (event.startsWith("location/") && (typeof payload.id !== "string" || !payload.id))) {
     return new Response(JSON.stringify({ error: "Invalid event" }), { status: 400 });
   }
   if (event === "customers/redact" || event === "customers/data_request") {

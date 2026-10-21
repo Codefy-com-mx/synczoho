@@ -27,6 +27,9 @@ describe("Tiendanube webhooks", () => {
     expect(REQUIRED_EVENTS).toEqual(expect.arrayContaining([
       "order/created", "order/updated", "order/paid", "order/cancelled",
       "app/uninstalled", "app/suspended", "app/resumed",
+      "product/created", "product/updated", "product/deleted",
+      "category/created", "category/updated", "category/deleted",
+      "location/created", "location/updated", "location/deleted",
     ]));
   });
 

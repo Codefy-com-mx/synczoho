@@ -47,4 +47,27 @@ describe("Tiendanube webhook receiver", () => {
       store_id: 123, event: "order/paid", id: 45,
     }))).status).toBe(400);
   });
+
+  it.each(["product", "category"])("requires a safe integer id for %s/* events", async (family) => {
+    const event = `${family}/updated`;
+    const res = await handler(request("tiendanube-webhook", { store_id: 123, event }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Invalid event" });
+    expect(query).not.toHaveBeenCalled();
+    expect((await handler(request("tiendanube-webhook", { store_id: 123, event, id: "abc" }))).status).toBe(400);
+    expect((await handler(request("tiendanube-webhook", { store_id: 123, event, id: 55 }))).status).toBe(200);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO webhook_events"),
+      ["123", event, JSON.stringify({ store_id: 123, event, id: 55 })]);
+  });
+
+  it("requires a non-empty string id for location/* events", async () => {
+    const event = "location/created";
+    expect((await handler(request("tiendanube-webhook", { store_id: 123, event }))).status).toBe(400);
+    expect((await handler(request("tiendanube-webhook", { store_id: 123, event, id: "" }))).status).toBe(400);
+    expect((await handler(request("tiendanube-webhook", { store_id: 123, event, id: 7 }))).status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+    const id = "01HZX3K9Q2V8M4N5P6R7S8T9UV";
+    expect((await handler(request("tiendanube-webhook", { store_id: 123, event, id }))).status).toBe(200);
+    expect(query).toHaveBeenCalledOnce();
+  });
 });

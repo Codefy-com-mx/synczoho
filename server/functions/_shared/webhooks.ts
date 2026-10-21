@@ -10,6 +10,15 @@ export const REQUIRED_EVENTS = [
   "app/uninstalled",
   "app/suspended",
   "app/resumed",
+  "product/created",
+  "product/updated",
+  "product/deleted",
+  "category/created",
+  "category/updated",
+  "category/deleted",
+  "location/created",
+  "location/updated",
+  "location/deleted",
 ];
 
 export interface TiendanubeWebhook {
