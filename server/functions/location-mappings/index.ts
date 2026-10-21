@@ -25,21 +25,29 @@ export default serve(async (req) => {
     if (action === "save") {
       if (!Array.isArray(mappings)) return json({ error: "mappings requerido" }, 400);
       const zoho = conn ? await fetchZohoLocations(admin, conn) : [];
-      const known = new Set((await loadLocationMappings(id)).map((m) => m.tn_location_id));
+      const stored = await loadLocationMappings(id);
+      const final = new Map(stored.map((m) => [m.tn_location_id, m.zoho_location_id]));
       for (const m of mappings) {
-        if (!known.has(String(m?.tn_location_id))) return json({ error: "Location de Tiendanube desconocida" }, 400);
-        if (m.zoho_location_id !== null && !zoho.some((z) => z.id === m.zoho_location_id)) {
-          return json({ error: "Location de Zoho inexistente" }, 400);
+        if (!final.has(String(m?.tn_location_id))) return json({ error: "Location de Tiendanube desconocida" }, 400);
+        if (m.zoho_location_id !== null) {
+          if (!zoho) return json({ error: "Zoho no está disponible, inténtalo de nuevo" }, 503);
+          if (!zoho.some((z) => z.id === m.zoho_location_id)) return json({ error: "Location de Zoho inexistente" }, 400);
         }
+        final.set(m.tn_location_id, m.zoho_location_id);
+      }
+      // Una location de Zoho por location de Tiendanube, evaluado sobre el estado final del lote.
+      const ids = [...final.values()].filter((v) => v !== null);
+      if (new Set(ids).size !== ids.length) {
+        return json({ error: "Una location de Zoho solo puede vincularse a una location de Tiendanube" }, 400);
       }
       for (const m of mappings) {
-        const z = zoho.find((l) => l.id === m.zoho_location_id);
+        const z = zoho?.find((l) => l.id === m.zoho_location_id);
         await getPool().query(
           "UPDATE location_mappings SET zoho_location_id=$3, zoho_location_name=$4 WHERE store_id=$1 AND tn_location_id=$2",
           [id, m.tn_location_id, z?.id ?? null, z?.name ?? null],
         );
       }
-      return json({ mappings: await loadLocationMappings(id), tn_available: true, zoho_available: zoho.length > 0, zoho_locations: zoho });
+      return json({ mappings: await loadLocationMappings(id), tn_available: true, zoho_available: !!zoho && zoho.length > 0, zoho_locations: zoho ?? [] });
     }
 
     // ponytail: "get" también consulta ambas APIs; si pesa, devolver solo las filas guardadas.

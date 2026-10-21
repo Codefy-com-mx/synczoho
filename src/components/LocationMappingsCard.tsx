@@ -73,6 +73,12 @@ export function LocationMappingsCard({ storeId }: Props) {
               >
                 <Select.Option value="" label="Sin vincular" />
                 {data.zoho_locations.map((z) => <Select.Option key={z.id} value={z.id} label={z.name} />)}
+                {m.zoho_location_id && !data.zoho_locations.some((z) => z.id === m.zoho_location_id) && (
+                  <Select.Option
+                    value={m.zoho_location_id}
+                    label={`${m.zoho_location_name ?? m.zoho_location_id} (no disponible)`}
+                  />
+                )}
               </Select>
             </Box>
           ))}

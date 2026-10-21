@@ -43,4 +43,15 @@ describe('LocationMappingsCard', () => {
     render(<LocationMappingsCard storeId="s1" />);
     expect(await screen.findByText(/no usa varias ubicaciones/)).toBeInTheDocument();
   });
+
+  it('muestra un vínculo guardado que Zoho no devuelve como "no disponible", no como Sin vincular', async () => {
+    invoke.mockResolvedValueOnce({
+      data: { mappings: [row('z9')], tn_available: true, zoho_available: false, zoho_locations: [] }, error: null,
+    });
+    const { container } = render(<LocationMappingsCard storeId="s1" />);
+    await screen.findByText('Central');
+    const select = container.querySelector('select[name="loc-A"]') as HTMLSelectElement;
+    expect(select.value).toBe('z9');
+    expect(screen.getByRole('option', { name: 'Bodega (no disponible)' })).toBeInTheDocument();
+  });
 });

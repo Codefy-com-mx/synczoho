@@ -34,9 +34,14 @@ export async function fetchTnLocations(store: TiendanubeStore): Promise<TnLocati
   }
 }
 
-/** `[]` si Zoho responde error (org sin multi-location). Los errores de red/token sí se propagan. */
-export async function fetchZohoLocations(admin: DatabaseClient, conn: ZohoConnection): Promise<ZohoLocation[]> {
+/**
+ * `null` si Zoho falla de forma transitoria (429/5xx): no se sabe qué locations hay.
+ * `[]` si responde otro error 4xx (org sin multi-location o sin acceso) o no devuelve locations.
+ * Los errores de red/token se propagan.
+ */
+export async function fetchZohoLocations(admin: DatabaseClient, conn: ZohoConnection): Promise<ZohoLocation[] | null> {
   const resp = await zohoFetch(admin, conn, "/inventory/v1/locations");
+  if (resp.status === 429 || resp.status >= 500) return null;
   if (!resp.ok) return [];
   const data = await resp.json();
   return (data.locations ?? []).map((l: any) => ({ id: String(l.location_id), name: String(l.location_name ?? "") }));
@@ -104,11 +109,12 @@ export async function refreshLocationMappings(
 ): Promise<LocationsResult> {
   const tn = await fetchTnLocations(store);
   const existing = await loadLocationMappings(store.store_id);
-  const zoho = conn ? await fetchZohoLocations(admin, conn) : [];
-  const zoho_available = zoho.length > 0;
-  if (!tn) return { mappings: existing, tn_available: false, zoho_available, zoho_locations: zoho };
-  // Sin lista de Zoho (desconectado o error) no se borran los vínculos del comerciante.
-  const mappings = zoho_available
+  // Sin conexión o con Zoho caído (null) no se sabe qué locations existen: los vínculos guardados no se tocan.
+  const zoho = conn ? await fetchZohoLocations(admin, conn) : null;
+  const zoho_available = !!zoho && zoho.length > 0;
+  if (!tn) return { mappings: existing, tn_available: false, zoho_available, zoho_locations: zoho ?? [] };
+  // Con conexión activa y lista (incluso vacía) los ids desaparecidos pasan a null.
+  const mappings = zoho
     ? autoMatchLocations(tn, zoho, existing)
     : tn.map((t) => {
         const prev = existing.find((m) => m.tn_location_id === t.id);
@@ -118,5 +124,5 @@ export async function refreshLocationMappings(
         };
       });
   await persist(store.store_id, mappings);
-  return { mappings, tn_available: true, zoho_available, zoho_locations: zoho };
+  return { mappings, tn_available: true, zoho_available, zoho_locations: zoho ?? [] };
 }

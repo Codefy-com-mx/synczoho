@@ -98,8 +98,18 @@ describe("fetchTnLocations", () => {
 
 describe("fetchZohoLocations", () => {
   const conn: any = { store_id: "s1" };
-  it("respuesta no ok devuelve []", async () => {
+  it("4xx distinto de 429 devuelve [] (org sin multi-location)", async () => {
     h.zohoFetch.mockResolvedValue(new Response("{}", { status: 400 }));
+    expect(await fetchZohoLocations({} as any, conn)).toEqual([]);
+  });
+
+  it.each([429, 503])("%i devuelve null (transitorio)", async (status) => {
+    h.zohoFetch.mockResolvedValue(new Response("{}", { status }));
+    expect(await fetchZohoLocations({} as any, conn)).toBeNull();
+  });
+
+  it("200 sin locations devuelve []", async () => {
+    h.zohoFetch.mockResolvedValue(new Response(JSON.stringify({ locations: [] })));
     expect(await fetchZohoLocations({} as any, conn)).toEqual([]);
   });
 
@@ -137,6 +147,28 @@ describe("refreshLocationMappings", () => {
     expect(sqls).toMatch(/DELETE FROM location_mappings/);
     const del = h.queries.find((q) => /DELETE FROM location_mappings/.test(q.text))!;
     expect(del.values).toEqual(["s1", ["A"]]);
+  });
+
+  it("con Zoho caído (null) conserva los vínculos y no los persiste como null", async () => {
+    stubFetch(200, [{ id: "A", name: "Tienda" }]);
+    h.rows = [existing("A", "z1")];
+    h.zohoFetch.mockResolvedValue(new Response("{}", { status: 503 }));
+    const out = await refreshLocationMappings({} as any, store, conn);
+    expect(out.zoho_available).toBe(false);
+    expect(out.mappings[0]).toMatchObject({ zoho_location_id: "z1", zoho_location_name: "old-z1" });
+    const ins = h.queries.find((q) => /INSERT INTO location_mappings/.test(q.text))!;
+    expect(ins.values[3]).toEqual(["z1"]);
+  });
+
+  it("con lista [] y conexión activa limpia los vínculos y los persiste", async () => {
+    stubFetch(200, [{ id: "A", name: "Tienda" }, { id: "B", name: "Filial" }]);
+    h.rows = [existing("A", "z1")];
+    h.zohoFetch.mockResolvedValue(new Response("{}", { status: 400 }));
+    const out = await refreshLocationMappings({} as any, store, conn);
+    expect(out.zoho_available).toBe(false);
+    expect(out.mappings.map((m) => m.zoho_location_id)).toEqual([null, null]);
+    const ins = h.queries.find((q) => /INSERT INTO location_mappings/.test(q.text))!;
+    expect(ins.values[3]).toEqual([null, null]);
   });
 
   it("sin conexión Zoho conserva los vínculos existentes", async () => {
