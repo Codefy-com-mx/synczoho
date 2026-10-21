@@ -43,41 +43,75 @@ export async function tnFetch(
   return await fetch(url, { ...init, headers });
 }
 
+export interface RetryObserver {
+  onExhausted?(info: { status: number; path: string }): void | Promise<void>;
+}
+
 /**
- * tnFetch con reintentos automáticos en 429 (Leaky Bucket: 2 req/s, bucket 40).
- * - Respeta el header Retry-After si está presente.
- * - Backoff exponencial: 1s → 2s → 4s → 8s.
- * - Si x-rate-limit-request-left < 5, agrega una pausa preventiva de 500ms.
+ * Espera antes del reintento `attempt` (desde 0), o null si el status no es reintentable.
+ * status 0 = error de red. 429: 2s·2^n (tope 30s) o Retry-After; 5xx/red: 0.5s·2^n (tope 8s).
+ * Suma hasta 25% de jitter.
+ */
+export function retryDelayMs(
+  status: number,
+  attempt: number,
+  retryAfter: string | null,
+  random: () => number = Math.random,
+): number | null {
+  let delay: number;
+  if (status === 429) {
+    const ra = Number(retryAfter);
+    delay = ra > 0 ? ra * 1000 : Math.min(2000 * 2 ** attempt, 30_000);
+  } else if (status === 0 || [500, 502, 503, 504].includes(status)) {
+    delay = Math.min(500 * 2 ** attempt, 8_000);
+  } else {
+    return null;
+  }
+  return Math.round(delay + random() * 0.25 * delay);
+}
+
+/**
+ * tnFetch con reintentos en 429, 500/502/503/504 y errores de red (ver retryDelayMs).
+ * Agotados los reintentos devuelve la última respuesta (o relanza el error de red)
+ * y avisa a `observer.onExhausted`.
+ * Si x-rate-limit-request-left < 5, agrega una pausa preventiva de 600ms.
  */
 export async function tnFetchWithRetry(
   store: TiendanubeStore,
   path: string,
   init: RequestInit = {},
   maxRetries = 4,
+  observer?: RetryObserver,
 ): Promise<Response> {
-  let attempt = 0;
-  while (true) {
-    const resp = await tnFetch(store, path, init);
+  for (let attempt = 0; ; attempt++) {
+    let resp: Response | undefined;
+    let netErr: unknown;
+    try {
+      resp = await tnFetch(store, path, init);
+    } catch (e) {
+      netErr = e;
+    }
+    const status = resp?.status ?? 0;
 
-    // Pausa preventiva si queda poca cuota
-    const remaining = Number(resp.headers.get("x-rate-limit-request-left") ?? 999);
-    if (remaining > 0 && remaining < 5) {
-      await sleep(600);
+    if (resp) {
+      // Pausa preventiva si queda poca cuota
+      const remaining = Number(resp.headers.get("x-rate-limit-request-left") ?? 999);
+      if (remaining > 0 && remaining < 5) await sleep(600);
     }
 
-    if (resp.status !== 429 || attempt >= maxRetries) {
-      return resp;
+    const waitMs = retryDelayMs(status, attempt, resp?.headers.get("Retry-After") ?? null);
+    if (waitMs === null) {
+      if (resp) return resp;
+      throw netErr;
+    }
+    if (attempt >= maxRetries) {
+      await observer?.onExhausted?.({ status, path });
+      if (resp) return resp;
+      throw netErr;
     }
 
-    // 429 – backoff exponencial
-    const retryAfter = Number(resp.headers.get("Retry-After") ?? 0);
-    const waitMs = retryAfter > 0
-      ? retryAfter * 1000
-      : Math.min(1000 * Math.pow(2, attempt), 16_000);
-
-    console.warn(`[TN] Rate limited. Reintento ${attempt + 1}/${maxRetries} en ${waitMs}ms`);
+    console.warn(`[TN] ${status || "red"} en ${path}. Reintento ${attempt + 1}/${maxRetries} en ${waitMs}ms`);
     await sleep(waitMs);
-    attempt++;
   }
 }
 
