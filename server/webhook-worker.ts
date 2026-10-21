@@ -1,6 +1,10 @@
 import { getPool } from "./db.js";
 import createSalesorder from "./functions/zoho-create-salesorder/index.js";
-import { TN_API, TN_USER_AGENT } from "./functions/_shared/tiendanube.js";
+import sendAlertEmail from "./functions/send-alert-email/index.js";
+import { TN_API, TN_USER_AGENT, getStore } from "./functions/_shared/tiendanube.js";
+import { backfillCatalog, deleteProduct, refreshCategory, refreshProduct } from "./functions/_shared/tn-catalog.js";
+import { logRetryObserver } from "./functions/_shared/tn-observer.js";
+import { getAdminClient, logSync } from "./functions/_shared/zoho.js";
 
 interface EventRow {
   id: string;
@@ -36,9 +40,24 @@ async function recordPrivacyRequest(row: EventRow, status: "pending_manual" | "c
   `, [row.id, row.store_id, row.event_type, customerId || null, status, status === "completed" ? new Date() : null]);
 }
 
-async function processEvent(row: EventRow): Promise<void> {
+export async function processEvent(row: EventRow): Promise<void> {
   const pool = getPool();
   const { store_id: storeId, event_type: event, payload } = row;
+  if (event.startsWith("product/") || event.startsWith("category/") || event === "internal/backfill") {
+    const store = await getStore(getAdminClient(), storeId);
+    if (event === "internal/backfill") {
+      await backfillCatalog(store, logRetryObserver(getAdminClient(), storeId));
+    } else if (event === "product/deleted") {
+      await deleteProduct(storeId, Number(payload.id));
+    } else if (event === "category/deleted") {
+      await pool.query("DELETE FROM tn_categories WHERE store_id=$1 AND id=$2", [storeId, Number(payload.id)]);
+    } else if (event.startsWith("category/")) {
+      await refreshCategory(store, Number(payload.id));
+    } else {
+      await refreshProduct(store, Number(payload.id));
+    }
+    return;
+  }
   if (event.startsWith("order/")) {
     const result = await createSalesorder(new Request("http://internal/functions", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -167,6 +186,22 @@ Evento interno: ${row.id}
   }
 }
 
+const MAX_CATALOG_ATTEMPTS = 5;
+
+// Tras agotar reintentos, el catálogo local puede estar desfasado: lo marcamos y avisamos.
+export async function onEventFailure(row: EventRow, message: string): Promise<void> {
+  const isCatalog = row.event_type.startsWith("product/") || row.event_type.startsWith("category/")
+    || row.event_type === "internal/backfill";
+  if (!isCatalog || row.attempts < MAX_CATALOG_ATTEMPTS) return;
+  const errorMessage = `${row.event_type}: ${message}`;
+  await getPool().query("UPDATE stores SET catalog_status='stale' WHERE store_id=$1", [row.store_id]);
+  await logSync(getAdminClient(), row.store_id, { operation: "catalog_webhook", status: "error", message: errorMessage });
+  await sendAlertEmail(new Request("http://internal/functions", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ storeId: row.store_id, operation: "catalog_webhook", errorMessage }),
+  }));
+}
+
 let running = false;
 let lastCleanup = 0;
 export async function runWebhookWorker(): Promise<void> {
@@ -192,7 +227,9 @@ export async function runWebhookWorker(): Promise<void> {
       const row = claimed.rows[0];
       if (!row) break;
       const lockClient = await pool.connect();
-      const lockKey = `webhooks:${row.store_id}`;
+      // Un backfill largo usa su propia clave para no bloquear los pedidos de la tienda.
+      // ponytail: el bucle es secuencial, así que un backfill de minutos igual retrasa los demás eventos del worker; mover a un worker aparte si molesta.
+      const lockKey = `${row.event_type.startsWith("internal/") ? "backfill" : "webhooks"}:${row.store_id}`;
       try {
         // ponytail: serialize one store at a time; switch to per-order locks only if throughput demands it.
         const lock = await lockClient.query<{ locked: boolean }>(
@@ -211,6 +248,7 @@ export async function runWebhookWorker(): Promise<void> {
           "UPDATE webhook_events SET error_message=$2, next_attempt_at=now()+make_interval(secs => LEAST(3600, 60 * POWER(2, LEAST(attempts, 6))::integer)) WHERE id=$1",
           [row.id, message.slice(0, 500)],
         );
+        await onEventFailure(row, message).catch((e) => console.error("Catalog failure handling failed", row.id, e));
       } finally {
         await lockClient.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(() => undefined);
         lockClient.release();

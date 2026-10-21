@@ -8,6 +8,7 @@ const OP_LABELS: Record<string, string> = {
   price_sync_run:  "Sincronización de precios",
   order_sync:      "Sincronización de orden",
   zoho_sync_import: "Importación de productos",
+  catalog_webhook: "Sincronización de catálogo",
 };
 
 function json(payload: unknown, status = 200) {
