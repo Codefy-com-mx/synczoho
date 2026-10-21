@@ -135,6 +135,21 @@ describe('SyncStockView automatic sync and prices', () => {
     expect(savedSettings().at(-1)).toMatchObject({ prices_enabled: true, prices_schedule: 'daily' });
   });
 
+  it('lets the merchant choose the price direction and blocks the manual Zoho → Tiendanube run otherwise', async () => {
+    mockInvoke({}, { ...settings, prices_enabled: true, prices_direction: 'zoho_to_tn' });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+
+    expect(screen.getByRole('button', { name: /Sincronizar precios/ })).not.toBeDisabled();
+    await act(async () => {
+      fireEvent.change(await screen.findByLabelText('Dirección de precios'), { target: { value: 'tn_to_zoho' } });
+    });
+
+    expect(savedSettings().at(-1)).toMatchObject({ prices_direction: 'tn_to_zoho' });
+    expect(screen.getByRole('button', { name: /Sincronizar precios/ })).toBeDisabled();
+    expect(screen.getByLabelText('Sincronización automática de precios')).toBeDisabled();
+  });
+
   const clickPrices = async () => {
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: /Sincronizar precios/ }));

@@ -121,7 +121,7 @@ export default serve(async (req) => {
     // the PostgREST embedded join previously used by the edge runtime.
     const { data: schedules, error } = await admin
       .from("sync_settings")
-      .select("store_id, stock_enabled, stock_schedule, prices_enabled, prices_schedule")
+      .select("store_id, stock_enabled, stock_schedule, prices_enabled, prices_schedule, prices_direction")
       .or("stock_schedule.neq.disabled,prices_schedule.neq.disabled");
 
     if (error) throw error;
@@ -152,7 +152,8 @@ export default serve(async (req) => {
       }
 
       // ── Prices ───────────────────────────────────────────────────────────────
-      if (s.prices_enabled && s.prices_schedule !== "disabled" && INTERVALS_MS[s.prices_schedule]) {
+      // Con Tiendanube → Zoho los precios entran por webhook de producto; la corrida programada (Zoho → TN) no aplica.
+      if (s.prices_enabled && s.prices_direction !== "tn_to_zoho" && s.prices_schedule !== "disabled" && INTERVALS_MS[s.prices_schedule]) {
         result.prices = await runScheduledOperation({
           storeId: s.store_id,
           operation: "price_sync_run",

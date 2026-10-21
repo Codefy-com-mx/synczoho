@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   fetchCalls: [] as Array<{ path: string; method: string }>,
   logCalls: [] as any[],
   stockPriceBodies: [] as any[],
+  settings: { prices_direction: "zoho_to_tn" } as any,
 }));
 
 vi.mock("../../server/db.js", () => ({
@@ -24,7 +25,15 @@ vi.mock("../../server/db.js", () => ({
 
 vi.mock("../../server/functions/_shared/zoho.js", () => ({
   corsHeaders: {},
-  getAdminClient: () => ({ from: () => ({}) }),
+  getAdminClient: () => ({
+    from: () => {
+      const b: any = {};
+      b.select = () => b;
+      b.eq = () => b;
+      b.maybeSingle = async () => ({ data: h.settings, error: null });
+      return b;
+    },
+  }),
   getZohoConnection: async () => ({
     store_id: "store-1",
     organization_id: "org-1",
@@ -149,6 +158,7 @@ beforeEach(() => {
   h.fetchCalls = [];
   h.logCalls = [];
   h.stockPriceBodies = [];
+  h.settings = { prices_direction: "zoho_to_tn" };
 });
 
 describe("sync-prices-run single flight", () => {
@@ -228,6 +238,29 @@ describe("sync-prices-run single flight", () => {
     expect(pool.connectCount).toBe(0);
     expect(h.events).toEqual(["zoho:items", "catalog:load"]);
     expect(h.logCalls).toHaveLength(0);
+  });
+});
+
+describe("sync-prices-run direction", () => {
+  it("rejects a real run with 400 when prices flow Tiendanube → Zoho, before any lock or call", async () => {
+    h.settings = { prices_direction: "tn_to_zoho" };
+
+    const { response, payload } = await runHandler();
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({ error: "La dirección de precios es Tiendanube → Zoho" });
+    expect(h.events).toEqual([]);
+    expect(h.lockPoolRequests).toBe(0);
+    expect(h.logCalls).toHaveLength(0);
+  });
+
+  it("leaves dry runs unchanged when prices flow Tiendanube → Zoho", async () => {
+    h.settings = { prices_direction: "tn_to_zoho" };
+
+    const { response, payload } = await runHandler({ dryRun: true });
+
+    expect(response.status).toBe(200);
+    expect(payload.dry_run).toBe(true);
   });
 });
 

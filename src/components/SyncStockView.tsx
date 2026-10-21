@@ -111,6 +111,8 @@ export function SyncStockView({ storeId }: Props) {
     }
   };
 
+  const pricesFromTn = settings?.prices_direction === 'tn_to_zoho';
+
   if (!settings) {
     return <Box display="flex" justifyContent="center" padding="6"><Spinner /></Box>;
   }
@@ -200,7 +202,7 @@ export function SyncStockView({ storeId }: Props) {
               onClick={runPrices}
               loading={runningPrices}
               progress={null}
-              disabled={!settings.prices_enabled}
+              disabled={!settings.prices_enabled || pricesFromTn}
               icon={<RedoIcon />}
               loadingLabel="Sincronizando"
             >
@@ -213,11 +215,28 @@ export function SyncStockView({ storeId }: Props) {
             <Box display="flex" alignItems="center" gap="2">
               <Checkbox
                 name="prices_enabled"
-                label="Actualizar precios desde Zoho"
+                label={pricesFromTn ? 'Actualizar precios en Zoho desde Tiendanube' : 'Actualizar precios desde Zoho'}
                 checked={settings.prices_enabled}
                 onChange={(e) => save({ prices_enabled: e.target.checked })}
               />
               <FieldHelp help="Copia el precio de venta de Zoho a Tiendanube por SKU. Si el ítem de Zoho tiene un precio de venta (sales rate) distinto de su tarifa, ese valor se publica como precio promocional; si no, se quita el precio promocional de Tiendanube." />
+            </Box>
+            <Box>
+              <Box display="flex" alignItems="center" gap="2">
+                <Text fontWeight="medium">Dirección de precios</Text>
+                <FieldHelp help="Solo una dirección funciona a la vez. 'Zoho → Tiendanube' copia los precios de Zoho a Tiendanube con la sincronización manual o programada. 'Tiendanube → Zoho' actualiza el ítem de Zoho cuando cambia el precio de un producto en Tiendanube (por aviso automático) y desactiva la sincronización manual y programada de precios." />
+              </Box>
+              <Select
+                id="prices_direction"
+                name="prices_direction"
+                aria-label="Dirección de precios"
+                value={settings.prices_direction ?? 'zoho_to_tn'}
+                onChange={(e) => save({ prices_direction: e.target.value as 'zoho_to_tn' | 'tn_to_zoho' })}
+                disabled={!settings.prices_enabled}
+              >
+                <Select.Option value="zoho_to_tn" label="Zoho → Tiendanube" />
+                <Select.Option value="tn_to_zoho" label="Tiendanube → Zoho" />
+              </Select>
             </Box>
             <Box>
               <Text fontWeight="medium">Sincronización automática</Text>
@@ -227,7 +246,7 @@ export function SyncStockView({ storeId }: Props) {
                 aria-label="Sincronización automática de precios"
                 value={settings.prices_schedule}
                 onChange={(e) => save({ prices_schedule: e.target.value as Schedule })}
-                disabled={!settings.prices_enabled}
+                disabled={!settings.prices_enabled || pricesFromTn}
               >
                 {scheduleOptions.map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
               </Select>

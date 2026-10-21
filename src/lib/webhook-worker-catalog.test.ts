@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
   query: vi.fn(),
   refreshProduct: vi.fn(),
+  loadProductCatalog: vi.fn(),
+  applyPricesToZoho: vi.fn(),
   deleteProduct: vi.fn(),
   refreshCategory: vi.fn(),
   backfillCatalog: vi.fn(),
@@ -13,8 +15,12 @@ const m = vi.hoisted(() => ({
 const store = { store_id: "1", access_token: "t", store_name: "s" };
 vi.mock("../../server/db", () => ({ getPool: () => ({ query: m.query }) }));
 vi.mock("../../server/functions/_shared/tn-catalog", () => ({
-  refreshProduct: m.refreshProduct, deleteProduct: m.deleteProduct,
+  refreshProduct: m.refreshProduct, loadProductCatalog: m.loadProductCatalog, deleteProduct: m.deleteProduct,
   refreshCategory: m.refreshCategory, backfillCatalog: m.backfillCatalog,
+}));
+vi.mock("../../server/functions/_shared/price-from-tn", async (orig) => ({
+  ...(await orig<typeof import("../../server/functions/_shared/price-from-tn")>()),
+  applyPricesToZoho: m.applyPricesToZoho,
 }));
 vi.mock("../../server/functions/_shared/tiendanube", () => ({
   getStore: vi.fn(async () => store), TN_API: "", TN_USER_AGENT: "",
@@ -34,6 +40,8 @@ beforeEach(() => {
   Object.values(m).forEach((f) => typeof f === "function" && "mockReset" in f && (f as any).mockReset());
   m.query.mockResolvedValue({ rows: [], rowCount: 1 });
   m.refreshProduct.mockResolvedValue("updated");
+  m.loadProductCatalog.mockResolvedValue([]);
+  m.applyPricesToZoho.mockResolvedValue({ updated: 1, errors: 0 });
   m.backfillCatalog.mockResolvedValue({ products: 0, variants: 0 });
   m.sendAlert.mockResolvedValue(new Response("{}"));
 });
@@ -68,6 +76,54 @@ describe("processEvent catálogo", () => {
 
   it("evento desconocido no lanza", async () => {
     await expect(processEvent(row("foo/bar"))).resolves.toBeUndefined();
+  });
+});
+
+describe("processEvent precios Tiendanube → Zoho", () => {
+  const variant = (price: number, promo: number | null = null) =>
+    ({ product_id: 55, variant_id: 1, sku: "SKU-1", price, promotional_price: promo, inventory_levels: [] });
+  const settingsRows = (prices_direction: string, prices_enabled = true) =>
+    m.query.mockImplementation(async (sql: string) =>
+      /FROM sync_settings/.test(sql) ? { rows: [{ prices_direction, prices_enabled }], rowCount: 1 } : { rows: [], rowCount: 1 });
+
+  it("con zoho_to_tn nunca aplica precios a Zoho", async () => {
+    settingsRows("zoho_to_tn");
+    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
+    await processEvent(row("product/updated", { id: 55 }));
+    expect(m.applyPricesToZoho).not.toHaveBeenCalled();
+  });
+
+  it("con tn_to_zoho y precio cambiado lo aplica una vez con el SKU correcto", async () => {
+    settingsRows("tn_to_zoho");
+    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12, 9)]);
+    await processEvent(row("product/updated", { id: 55 }));
+    expect(m.loadProductCatalog).toHaveBeenCalledWith("1", 55);
+    expect(m.applyPricesToZoho).toHaveBeenCalledOnce();
+    expect(m.applyPricesToZoho).toHaveBeenCalledWith({}, "1", [{ sku: "SKU-1", price: 12, promotional_price: 9 }]);
+  });
+
+  it("con precio igual (eco) no llama a Zoho", async () => {
+    settingsRows("tn_to_zoho");
+    m.loadProductCatalog.mockResolvedValue([variant(10)]);
+    await processEvent(row("product/updated", { id: 55 }));
+    expect(m.applyPricesToZoho).not.toHaveBeenCalled();
+  });
+
+  it("con prices_enabled=false no llama a Zoho", async () => {
+    settingsRows("tn_to_zoho", false);
+    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
+    await processEvent(row("product/updated", { id: 55 }));
+    expect(m.applyPricesToZoho).not.toHaveBeenCalled();
+  });
+
+  it("errores por SKU no hacen fallar el evento; una conexión caída sí", async () => {
+    settingsRows("tn_to_zoho");
+    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
+    m.applyPricesToZoho.mockResolvedValueOnce({ updated: 0, errors: 1 });
+    await expect(processEvent(row("product/updated", { id: 55 }))).resolves.toBeUndefined();
+    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
+    m.applyPricesToZoho.mockRejectedValueOnce(new Error("Zoho no está conectado"));
+    await expect(processEvent(row("product/updated", { id: 55 }))).rejects.toThrow("Zoho");
   });
 });
 

@@ -132,6 +132,15 @@ export async function refreshCategory(store: TiendanubeStore, categoryId: number
   );
 }
 
+const toRow = (r: any): CatalogVariant => ({
+  product_id: Number(r.product_id),
+  variant_id: Number(r.variant_id),
+  sku: r.sku,
+  price: num(r.price),
+  promotional_price: r.promotional_price == null ? null : num(r.promotional_price),
+  inventory_levels: r.inventory_levels ?? [],
+});
+
 export async function loadCatalog(storeId: string): Promise<CatalogVariant[]> {
   const { rows } = await getPool().query(
     `SELECT product_id, variant_id, sku, price, promotional_price, inventory_levels
@@ -139,14 +148,17 @@ export async function loadCatalog(storeId: string): Promise<CatalogVariant[]> {
      ORDER BY product_id, variant_id`,
     [storeId],
   );
-  return rows.map((r: any) => ({
-    product_id: Number(r.product_id),
-    variant_id: Number(r.variant_id),
-    sku: r.sku,
-    price: num(r.price),
-    promotional_price: r.promotional_price == null ? null : num(r.promotional_price),
-    inventory_levels: r.inventory_levels ?? [],
-  }));
+  return rows.map(toRow);
+}
+
+export async function loadProductCatalog(storeId: string, productId: number): Promise<CatalogVariant[]> {
+  const { rows } = await getPool().query(
+    `SELECT product_id, variant_id, sku, price, promotional_price, inventory_levels
+     FROM tn_variants WHERE store_id = $1 AND product_id = $2 AND sku IS NOT NULL
+     ORDER BY variant_id`,
+    [storeId, productId],
+  );
+  return rows.map(toRow);
 }
 
 export async function getCatalogStatus(storeId: string): Promise<"pending" | "ready" | "stale"> {

@@ -360,4 +360,20 @@ describe("sync-auto-run scheduled admission", () => {
     expect(childCalls()).toHaveLength(1);
     expect(h.alertCalls).toHaveLength(0);
   });
+
+  it("skips the scheduled price run when prices flow Tiendanube → Zoho", async () => {
+    scheduleStore({
+      stock_enabled: false,
+      stock_schedule: "disabled",
+      prices_enabled: true,
+      prices_schedule: "hourly",
+      prices_direction: "tn_to_zoho",
+    });
+
+    const { payload } = await runHandler();
+
+    expect(payload.results).toEqual([{ store_id: "store-1" }]);
+    expect(childCalls()).toHaveLength(0);
+    expect(pool.claimCalls).toHaveLength(0);
+  });
 });

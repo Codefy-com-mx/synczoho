@@ -31,6 +31,7 @@ const DEFAULTS = {
   alert_on_error: false,
   alert_email: null as string | null,
   prices_enabled: false,
+  prices_direction: "zoho_to_tn",
   stock_schedule: "disabled" as string,
   prices_schedule: "disabled" as string,
   products_publish_on_import: false,
@@ -62,7 +63,9 @@ export default serve(async (req) => {
       const allowed = Object.keys(DEFAULTS);
       const clean: Record<string, unknown> = { store_id: storeId };
       for (const k of allowed) {
-        if (k in settings) clean[k] = settings[k];
+        if (!(k in settings)) continue;
+        if (k === "prices_direction" && settings[k] !== "zoho_to_tn" && settings[k] !== "tn_to_zoho") continue;
+        clean[k] = settings[k];
       }
       const { data: existing } = await admin
         .from("sync_settings")

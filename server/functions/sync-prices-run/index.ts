@@ -55,6 +55,16 @@ export default serve(async (req) => {
     const dryRun = body?.dryRun === true;
     if (!storeId) return json({ error: "storeId requerido" }, 400);
 
+    admin = getAdminClient();
+    // Solo corre una dirección a la vez: con Tiendanube → Zoho los precios entran por webhook.
+    if (!dryRun) {
+      const { data: settings } = await admin
+        .from("sync_settings").select("prices_direction").eq("store_id", storeId).maybeSingle();
+      if (settings?.prices_direction === "tn_to_zoho") {
+        return json({ error: "La dirección de precios es Tiendanube → Zoho" }, 400);
+      }
+    }
+
     // Sin catálogo local todavía no hay contra qué comparar: neutro, sin tocar Zoho ni Tiendanube.
     if ((await getCatalogStatus(storeId)) === "pending") {
       return json({ skipped: true, reason: "catalog_not_ready" });
@@ -72,7 +82,6 @@ export default serve(async (req) => {
       }
     }
 
-    admin = getAdminClient();
     const conn = await getZohoConnection(admin, storeId);
     const store = await getStore(admin, storeId);
 

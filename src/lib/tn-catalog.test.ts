@@ -20,6 +20,7 @@ import {
   enqueueBackfill,
   getCatalogStatus,
   loadCatalog,
+  loadProductCatalog,
   refreshProduct,
   toCatalogVariants,
 } from "../../server/functions/_shared/tn-catalog.js";
@@ -149,6 +150,17 @@ describe("enqueueBackfill", () => {
     expect(await enqueueBackfill("s1")).toBe(false);
     expect(sqls()[0]).toContain("NOT EXISTS");
     expect(sqls()[0]).toContain("internal/backfill");
+  });
+});
+
+describe("loadProductCatalog", () => {
+  it("filtra por producto y ordena por variante", async () => {
+    h.rowsFor = () => [{ product_id: "5", variant_id: "6", sku: "A", price: "1.5", promotional_price: "1", inventory_levels: null }];
+    expect(await loadProductCatalog("s1", 5)).toEqual([
+      { product_id: 5, variant_id: 6, sku: "A", price: 1.5, promotional_price: 1, inventory_levels: [] },
+    ]);
+    expect(sqls().at(-1)).toMatch(/product_id = \$2[\s\S]*ORDER BY variant_id/);
+    expect(h.queries.at(-1)?.values).toEqual(["s1", 5]);
   });
 });
 

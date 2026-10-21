@@ -30,6 +30,7 @@ export interface SyncSettings {
   alert_on_error: boolean;
   alert_email: string | null;
   prices_enabled: boolean;
+  prices_direction: 'zoho_to_tn' | 'tn_to_zoho';
   products_publish_on_import: boolean;
   products_overwrite_existing: boolean;
   products_match_strategy: 'sku' | 'name';

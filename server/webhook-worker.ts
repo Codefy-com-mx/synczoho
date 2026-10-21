@@ -1,8 +1,11 @@
 import { getPool } from "./db.js";
 import createSalesorder from "./functions/zoho-create-salesorder/index.js";
 import sendAlertEmail from "./functions/send-alert-email/index.js";
-import { TN_API, TN_USER_AGENT, getStore } from "./functions/_shared/tiendanube.js";
-import { backfillCatalog, deleteProduct, refreshCategory, refreshProduct } from "./functions/_shared/tn-catalog.js";
+import { TN_API, TN_USER_AGENT, getStore, type TiendanubeStore } from "./functions/_shared/tiendanube.js";
+import { applyPricesToZoho, diffPrices } from "./functions/_shared/price-from-tn.js";
+import {
+  backfillCatalog, deleteProduct, loadProductCatalog, refreshCategory, refreshProduct,
+} from "./functions/_shared/tn-catalog.js";
 import { logRetryObserver } from "./functions/_shared/tn-observer.js";
 import { getAdminClient, logSync } from "./functions/_shared/zoho.js";
 
@@ -40,6 +43,23 @@ async function recordPrivacyRequest(row: EventRow, status: "pending_manual" | "c
   `, [row.id, row.store_id, row.event_type, customerId || null, status, status === "completed" ? new Date() : null]);
 }
 
+// Con dirección tn_to_zoho, un precio que cambió en Tiendanube se copia al ítem de Zoho.
+// Comparar contra la caché local evita el eco: un webhook sin cambio de precio no produce diff.
+async function refreshAndPushPrices(store: TiendanubeStore, productId: number): Promise<void> {
+  const { rows } = await getPool().query(
+    "SELECT prices_enabled, prices_direction FROM sync_settings WHERE store_id=$1", [store.store_id],
+  );
+  if (!rows[0]?.prices_enabled || rows[0].prices_direction !== "tn_to_zoho") {
+    await refreshProduct(store, productId);
+    return;
+  }
+  const before = await loadProductCatalog(store.store_id, productId);
+  await refreshProduct(store, productId);
+  const changes = diffPrices(before, await loadProductCatalog(store.store_id, productId));
+  // Los fallos por SKU se registran dentro; solo una conexión Zoho caída hace fallar (y reintentar) el evento.
+  if (changes.length > 0) await applyPricesToZoho(getAdminClient(), store.store_id, changes);
+}
+
 export async function processEvent(row: EventRow): Promise<void> {
   const pool = getPool();
   const { store_id: storeId, event_type: event, payload } = row;
@@ -53,6 +73,8 @@ export async function processEvent(row: EventRow): Promise<void> {
       await pool.query("DELETE FROM tn_categories WHERE store_id=$1 AND id=$2", [storeId, Number(payload.id)]);
     } else if (event.startsWith("category/")) {
       await refreshCategory(store, Number(payload.id));
+    } else if (event === "product/updated") {
+      await refreshAndPushPrices(store, Number(payload.id));
     } else {
       await refreshProduct(store, Number(payload.id));
     }
