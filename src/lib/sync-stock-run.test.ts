@@ -110,6 +110,7 @@ vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
 }));
 
 vi.mock("../../server/functions/_shared/locations.js", () => ({
+  ZOHO_TOTAL: "__total__",
   loadLocationMappings: async () => h.mappings,
   fetchTnLocations: async () => {
     h.events.push("tn:locations");
@@ -361,7 +362,51 @@ describe("sync-stock-run per location", () => {
     expect(h.stockPriceBodies).toHaveLength(0);
     expect(h.upsertCalls).toHaveLength(0);
     expect(h.logCalls).toEqual([expect.objectContaining({ operation: "stock_sync_run", status: "error" })]);
+    expect(h.logCalls[0].message).toContain(
+      "Hay varias ubicaciones en Tiendanube: elige en Configuración cuál recibe el stock total o vincúlalas con Zoho",
+    );
     expect(pool.held.size).toBe(0);
+  });
+
+  it("reports the unlinked Tiendanube locations when at least one is linked", async () => {
+    h.mappings.push({ tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: null, zoho_location_name: null });
+    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ blocked: null, unmapped_locations: ["L2"] });
+    expect(h.logCalls.at(-1).payload).toMatchObject({ unmapped_locations: ["L2"] });
+  });
+
+  it("sends Zoho's total to the ZOHO_TOTAL location only, without fetching item details", async () => {
+    h.mappings = [
+      { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
+      { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "__total__", zoho_location_name: "Stock total de Zoho" },
+    ];
+    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
+    h.catalog[0].inventory_levels = [{ location_id: "L1", stock: 3 }, { location_id: "L2", stock: 0 }];
+    h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 7 }];
+
+    const { payload } = await runHandler();
+
+    expect(payload).toMatchObject({ blocked: null, updated: 1, errors: 0, unmapped_locations: ["L1"] });
+    expect(h.events.filter((e) => e.startsWith("zoho:item:"))).toEqual([]);
+    expect(h.stockPriceBodies).toEqual([[{ id: 10, variants: [{ id: 100, inventory_levels: [{ location_id: "L2", stock: 7 }] }] }]]);
+  });
+
+  it("adjusts the Zoho org total without location_id in ZOHO_TOTAL mode", async () => {
+    h.settings = { stock_enabled: true, stock_direction: "tn_to_zoho", stock_priority: "zoho" };
+    h.mappings = [
+      { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
+      { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "__total__", zoho_location_name: "Stock total de Zoho" },
+    ];
+    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
+    h.catalog[0].inventory_levels = [{ location_id: "L1", stock: 3 }, { location_id: "L2", stock: 2 }];
+    h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 7 }];
+
+    await runHandler();
+
+    expect(h.adjustments[0].line_items).toEqual([{ item_id: "z-1", quantity_adjusted: -5 }]);
   });
 
   it("uses the legacy path without location_id when the locations scope is missing", async () => {

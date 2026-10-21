@@ -1,6 +1,6 @@
 // Plan de stock por location (MultiCD): puro, sin red ni base de datos.
 import type { CatalogVariant } from "./tn-catalog.js";
-import type { LocationMapping } from "./locations.js";
+import { ZOHO_TOTAL, type LocationMapping } from "./locations.js";
 import type { StockPriceProduct } from "./stock-price-batch.js";
 
 export interface ZohoStockItem {
@@ -93,15 +93,22 @@ export function planStockChanges(input: {
   };
 
   for (const { item, variant } of pairs) {
+    const zohoTotal = Number(item.stock_on_hand ?? item.actual_available_stock ?? 0);
     if (linked.length === 0) {
       // Camino legado (una sola location o sin scope): stock total, Tiendanube usa su primera location.
       const tnQty = variant.inventory_levels.reduce((sum, l) => sum + l.stock, 0);
-      add(item, variant, null, null, Number(item.stock_on_hand ?? item.actual_available_stock ?? 0), tnQty);
+      add(item, variant, null, null, zohoTotal, tnQty);
       continue;
     }
-    // Sin datos por location en Zoho no se sabe cuánto hay en cada almacén: no se toca.
-    if (!Array.isArray(item.locations)) continue;
     for (const m of linked) {
+      if (m.zoho_location_id === ZOHO_TOTAL) {
+        // Org sin multi-almacén: esta location de Tiendanube lleva el total de Zoho (sin location de Zoho).
+        const tl = variant.inventory_levels.find((l) => l.location_id === m.tn_location_id);
+        add(item, variant, m.tn_location_id, null, zohoTotal, tl?.stock ?? 0);
+        continue;
+      }
+      // Sin datos por location en Zoho no se sabe cuánto hay en cada almacén: no se toca.
+      if (!Array.isArray(item.locations)) continue;
       const zl = item.locations.find((l) => String(l.location_id) === m.zoho_location_id);
       const tl = variant.inventory_levels.find((l) => l.location_id === m.tn_location_id);
       add(item, variant, m.tn_location_id, m.zoho_location_id, Number(zl?.location_stock_on_hand ?? 0) || 0, tl?.stock ?? 0);

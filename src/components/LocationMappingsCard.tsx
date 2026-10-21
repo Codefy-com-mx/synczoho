@@ -13,6 +13,9 @@ interface LocationsResponse {
   mappings: LocationMapping[]; tn_available: boolean; zoho_available: boolean; zoho_locations: { id: string; name: string }[];
 }
 
+// Mismo centinela que server/functions/_shared/locations.ts: esta location recibe el stock total de Zoho.
+const ZOHO_TOTAL = '__total__';
+
 interface Props { storeId: string }
 
 export function LocationMappingsCard({ storeId }: Props) {
@@ -46,6 +49,10 @@ export function LocationMappingsCard({ storeId }: Props) {
     }
   };
 
+  // Org de Zoho sin locations y tienda con 2+ en Tiendanube: el comerciante elige cuál recibe el total.
+  const offerTotal = data.zoho_locations.length === 0 && data.mappings.length >= 2;
+  const totalHolder = data.mappings.find((m) => m.zoho_location_id === ZOHO_TOTAL)?.tn_location_id;
+
   return (
     <Card>
       <Card.Header>
@@ -61,6 +68,11 @@ export function LocationMappingsCard({ storeId }: Props) {
           {!loading && data.mappings.length === 1 && !data.zoho_available && (
             <Text color="neutral-textLow">Tu organización de Zoho no usa varias ubicaciones: se usa el stock total</Text>
           )}
+          {!loading && offerTotal && (
+            <Text color="neutral-textLow">
+              Zoho no usa varias ubicaciones y tu tienda tiene varias en Tiendanube: elige cuál recibe el stock total de Zoho. Las demás no se modifican.
+            </Text>
+          )}
           {!loading && data.mappings.map((m) => (
             <Box key={m.tn_location_id} display="grid" gap="2" gridTemplateColumns={{ xs: '1fr', md: '1fr 1fr' }} alignItems="center">
               <Text fontWeight="medium">{m.tn_location_name}</Text>
@@ -73,7 +85,14 @@ export function LocationMappingsCard({ storeId }: Props) {
               >
                 <Select.Option value="" label="Sin vincular" />
                 {data.zoho_locations.map((z) => <Select.Option key={z.id} value={z.id} label={z.name} />)}
-                {m.zoho_location_id && !data.zoho_locations.some((z) => z.id === m.zoho_location_id) && (
+                {(offerTotal || m.zoho_location_id === ZOHO_TOTAL) && (
+                  <Select.Option
+                    value={ZOHO_TOTAL}
+                    label="Stock total de Zoho (esta ubicación)"
+                    disabled={!!totalHolder && totalHolder !== m.tn_location_id}
+                  />
+                )}
+                {m.zoho_location_id && m.zoho_location_id !== ZOHO_TOTAL && !data.zoho_locations.some((z) => z.id === m.zoho_location_id) && (
                   <Select.Option
                     value={m.zoho_location_id}
                     label={`${m.zoho_location_name ?? m.zoho_location_id} (no disponible)`}

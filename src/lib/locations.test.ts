@@ -17,6 +17,7 @@ vi.mock("../../server/db.js", () => ({
 vi.mock("../../server/functions/_shared/zoho.js", () => ({ zohoFetch: h.zohoFetch }));
 
 import {
+  ZOHO_TOTAL,
   autoMatchLocations,
   fetchTnLocations,
   fetchZohoLocations,
@@ -71,6 +72,24 @@ describe("autoMatchLocations", () => {
     const out = autoMatchLocations([tn("A", "Uno"), tn("B", "Dos")], [zo("z9", "Otra")], [existing("A", "z1")]);
     expect(out[0].zoho_location_id).toBeNull();
     expect(out[0].zoho_location_name).toBeNull();
+  });
+});
+
+describe("ZOHO_TOTAL", () => {
+  it("autoMatch conserva el vínculo al total aunque no esté en la lista de Zoho", () => {
+    const out = autoMatchLocations([tn("A", "Central"), tn("B", "Norte")], [], [existing("A", null), existing("B", ZOHO_TOTAL)]);
+    expect(out.map((m) => m.zoho_location_id)).toEqual([null, ZOHO_TOTAL]);
+    expect(out[1].zoho_location_name).toBe("Stock total de Zoho");
+  });
+
+  it("refresh con lista [] conserva el total y lo persiste", async () => {
+    stubFetch(200, [{ id: "A", name: "Tienda" }, { id: "B", name: "Filial" }]);
+    h.rows = [existing("B", ZOHO_TOTAL)];
+    h.zohoFetch.mockResolvedValue(new Response("{}", { status: 400 }));
+    const out = await refreshLocationMappings({} as any, store, { store_id: "s1" } as any);
+    expect(out.mappings.map((m) => m.zoho_location_id)).toEqual([null, ZOHO_TOTAL]);
+    const ins = h.queries.find((q) => /INSERT INTO location_mappings/.test(q.text))!;
+    expect(ins.values[3]).toEqual([null, ZOHO_TOTAL]);
   });
 });
 
