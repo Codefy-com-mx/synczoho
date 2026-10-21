@@ -9,10 +9,12 @@ const m = vi.hoisted(() => ({
   refreshCategory: vi.fn(),
   backfillCatalog: vi.fn(),
   logSync: vi.fn(),
+  getZohoConnection: vi.fn(),
   sendAlert: vi.fn(),
   observer: { onRetry: vi.fn() },
 }));
 const store = { store_id: "1", access_token: "t", store_name: "s" };
+const conn = { store_id: "1", organization_id: "o" };
 vi.mock("../../server/db", () => ({ getPool: () => ({ query: m.query }) }));
 vi.mock("../../server/functions/_shared/tn-catalog", () => ({
   refreshProduct: m.refreshProduct, loadProductCatalog: m.loadProductCatalog, deleteProduct: m.deleteProduct,
@@ -26,7 +28,7 @@ vi.mock("../../server/functions/_shared/tiendanube", () => ({
   getStore: vi.fn(async () => store), TN_API: "", TN_USER_AGENT: "",
 }));
 vi.mock("../../server/functions/_shared/zoho", () => ({
-  getAdminClient: () => ({}), logSync: m.logSync,
+  getAdminClient: () => ({}), logSync: m.logSync, getZohoConnection: m.getZohoConnection,
 }));
 vi.mock("../../server/functions/_shared/tn-observer", () => ({ logRetryObserver: () => m.observer }));
 vi.mock("../../server/functions/send-alert-email/index", () => ({ default: m.sendAlert }));
@@ -42,6 +44,7 @@ beforeEach(() => {
   m.refreshProduct.mockResolvedValue("updated");
   m.loadProductCatalog.mockResolvedValue([]);
   m.applyPricesToZoho.mockResolvedValue({ updated: 1, errors: 0 });
+  m.getZohoConnection.mockResolvedValue(conn);
   m.backfillCatalog.mockResolvedValue({ products: 0, variants: 0 });
   m.sendAlert.mockResolvedValue(new Response("{}"));
 });
@@ -99,7 +102,7 @@ describe("processEvent precios Tiendanube → Zoho", () => {
     await processEvent(row("product/updated", { id: 55 }));
     expect(m.loadProductCatalog).toHaveBeenCalledWith("1", 55);
     expect(m.applyPricesToZoho).toHaveBeenCalledOnce();
-    expect(m.applyPricesToZoho).toHaveBeenCalledWith({}, "1", [{ sku: "SKU-1", price: 12, promotional_price: 9 }]);
+    expect(m.applyPricesToZoho).toHaveBeenCalledWith({}, conn, "1", [{ sku: "SKU-1", price: 12, promotional_price: 9 }]);
   });
 
   it("con precio igual (eco) no llama a Zoho", async () => {
@@ -116,14 +119,30 @@ describe("processEvent precios Tiendanube → Zoho", () => {
     expect(m.applyPricesToZoho).not.toHaveBeenCalled();
   });
 
-  it("errores por SKU no hacen fallar el evento; una conexión caída sí", async () => {
+  it("errores por SKU no hacen fallar el evento", async () => {
     settingsRows("tn_to_zoho");
     m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
     m.applyPricesToZoho.mockResolvedValueOnce({ updated: 0, errors: 1 });
     await expect(processEvent(row("product/updated", { id: 55 }))).resolves.toBeUndefined();
-    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
-    m.applyPricesToZoho.mockRejectedValueOnce(new Error("Zoho no está conectado"));
+  });
+
+  it("sin conexión Zoho falla ANTES de refrescar, con la caché intacta para el reintento", async () => {
+    settingsRows("tn_to_zoho");
+    m.getZohoConnection.mockRejectedValue(new Error("Zoho no está conectado"));
     await expect(processEvent(row("product/updated", { id: 55 }))).rejects.toThrow("Zoho");
+    expect(m.refreshProduct).not.toHaveBeenCalled();
+    expect(m.applyPricesToZoho).not.toHaveBeenCalled();
+  });
+
+  it("orden: conexión → snapshot previo → refresh → snapshot posterior → aplicar", async () => {
+    settingsRows("tn_to_zoho");
+    m.loadProductCatalog.mockResolvedValueOnce([variant(10)]).mockResolvedValueOnce([variant(12)]);
+    await processEvent(row("product/updated", { id: 55 }));
+    const order = (f: { mock: { invocationCallOrder: number[] } }, i = 0) => f.mock.invocationCallOrder[i];
+    expect(order(m.getZohoConnection)).toBeLessThan(order(m.loadProductCatalog, 0));
+    expect(order(m.loadProductCatalog, 0)).toBeLessThan(order(m.refreshProduct));
+    expect(order(m.refreshProduct)).toBeLessThan(order(m.loadProductCatalog, 1));
+    expect(order(m.loadProductCatalog, 1)).toBeLessThan(order(m.applyPricesToZoho));
   });
 });
 

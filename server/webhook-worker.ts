@@ -7,7 +7,7 @@ import {
   backfillCatalog, deleteProduct, loadProductCatalog, refreshCategory, refreshProduct,
 } from "./functions/_shared/tn-catalog.js";
 import { logRetryObserver } from "./functions/_shared/tn-observer.js";
-import { getAdminClient, logSync } from "./functions/_shared/zoho.js";
+import { getAdminClient, getZohoConnection, logSync } from "./functions/_shared/zoho.js";
 
 interface EventRow {
   id: string;
@@ -53,11 +53,16 @@ async function refreshAndPushPrices(store: TiendanubeStore, productId: number): 
     await refreshProduct(store, productId);
     return;
   }
+  // La conexión se resuelve ANTES de refrescar: si Zoho no está disponible el evento falla con la caché
+  // intacta y el reintento ve el diff original.
+  // ponytail: un crash entre refreshProduct y applyPricesToZoho pierde el push; haría falta un push pendiente durable.
+  const admin = getAdminClient();
+  const conn = await getZohoConnection(admin, store.store_id);
   const before = await loadProductCatalog(store.store_id, productId);
   await refreshProduct(store, productId);
   const changes = diffPrices(before, await loadProductCatalog(store.store_id, productId));
-  // Los fallos por SKU se registran dentro; solo una conexión Zoho caída hace fallar (y reintentar) el evento.
-  if (changes.length > 0) await applyPricesToZoho(getAdminClient(), store.store_id, changes);
+  // Los fallos por SKU se registran dentro y no hacen fallar el evento.
+  if (changes.length > 0) await applyPricesToZoho(admin, conn, store.store_id, changes);
 }
 
 export async function processEvent(row: EventRow): Promise<void> {

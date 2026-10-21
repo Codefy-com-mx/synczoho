@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   logCalls: [] as any[],
   stockPriceBodies: [] as any[],
   settings: { prices_direction: "zoho_to_tn" } as any,
+  settingsError: null as any,
 }));
 
 vi.mock("../../server/db.js", () => ({
@@ -30,7 +31,7 @@ vi.mock("../../server/functions/_shared/zoho.js", () => ({
       const b: any = {};
       b.select = () => b;
       b.eq = () => b;
-      b.maybeSingle = async () => ({ data: h.settings, error: null });
+      b.maybeSingle = async () => ({ data: h.settingsError ? null : h.settings, error: h.settingsError });
       return b;
     },
   }),
@@ -159,6 +160,7 @@ beforeEach(() => {
   h.logCalls = [];
   h.stockPriceBodies = [];
   h.settings = { prices_direction: "zoho_to_tn" };
+  h.settingsError = null;
 });
 
 describe("sync-prices-run single flight", () => {
@@ -252,6 +254,18 @@ describe("sync-prices-run direction", () => {
     expect(h.events).toEqual([]);
     expect(h.lockPoolRequests).toBe(0);
     expect(h.logCalls).toHaveLength(0);
+  });
+
+  it("fails closed with 500 when the settings read errors, before any lock or call", async () => {
+    h.settingsError = { message: "db down" };
+
+    const { response, payload } = await runHandler();
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toEqual(expect.any(String));
+    expect(h.events).toEqual([]);
+    expect(h.lockPoolRequests).toBe(0);
+    expect(h.fetchCalls).toHaveLength(0);
   });
 
   it("leaves dry runs unchanged when prices flow Tiendanube → Zoho", async () => {

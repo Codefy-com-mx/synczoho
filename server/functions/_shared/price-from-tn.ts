@@ -1,7 +1,7 @@
 // Precios Tiendanube → Zoho: detecta cambios entre dos instantáneas de un producto y los aplica al ítem de Zoho.
 import { getPool } from "../../db.js";
 import type { DatabaseClient } from "../../db.js";
-import { getZohoConnection, logSync, zohoFetch } from "./zoho.js";
+import { logSync, zohoFetch, type ZohoConnection } from "./zoho.js";
 import type { CatalogVariant } from "./tn-catalog.js";
 
 const EPSILON = 0.01; // mismo umbral que sync-prices-run
@@ -30,14 +30,13 @@ export function diffPrices(before: CatalogVariant[], after: CatalogVariant[]): P
 
 export async function applyPricesToZoho(
   admin: DatabaseClient,
+  conn: ZohoConnection,
   storeId: string,
   changes: PriceChange[],
 ): Promise<{ updated: number; errors: number }> {
   let updated = 0;
   let errors = 0;
   if (changes.length === 0) return { updated, errors };
-  // Sin conexión no hay nada que reintentar por SKU: que falle el evento y se reintente.
-  const conn = await getZohoConnection(admin, storeId);
   for (const c of changes) {
     try {
       const { rows } = await getPool().query(

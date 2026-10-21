@@ -58,8 +58,10 @@ export default serve(async (req) => {
     admin = getAdminClient();
     // Solo corre una dirección a la vez: con Tiendanube → Zoho los precios entran por webhook.
     if (!dryRun) {
-      const { data: settings } = await admin
+      const { data: settings, error: settingsError } = await admin
         .from("sync_settings").select("prices_direction").eq("store_id", storeId).maybeSingle();
+      // Fail closed: sin poder leer la dirección no se arriesga a pisar precios de Tiendanube.
+      if (settingsError) return json({ error: "No se pudo leer la configuración de precios" }, 500);
       if (settings?.prices_direction === "tn_to_zoho") {
         return json({ error: "La dirección de precios es Tiendanube → Zoho" }, 400);
       }

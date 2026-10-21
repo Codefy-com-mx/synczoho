@@ -3,13 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   query: vi.fn(),
   zohoFetch: vi.fn(),
-  getZohoConnection: vi.fn(),
   logSync: vi.fn(),
 }));
 
 vi.mock("../../server/db.js", () => ({ getPool: () => ({ query: h.query }) }));
 vi.mock("../../server/functions/_shared/zoho.js", () => ({
-  getZohoConnection: h.getZohoConnection,
   zohoFetch: h.zohoFetch,
   logSync: h.logSync,
 }));
@@ -41,15 +39,15 @@ describe("diffPrices", () => {
 
 describe("applyPricesToZoho", () => {
   const admin = {} as any;
+  const conn = { store_id: "s1" } as any;
   beforeEach(() => {
     Object.values(h).forEach((f) => f.mockReset());
-    h.getZohoConnection.mockResolvedValue({ store_id: "s1" });
     h.zohoFetch.mockResolvedValue(new Response("{}", { status: 200 }));
   });
 
   it("hace PUT con rate y sales_rate = promo ?? price", async () => {
     h.query.mockResolvedValue({ rows: [{ zoho_item_id: "z1" }] });
-    const r = await applyPricesToZoho(admin, "s1", [
+    const r = await applyPricesToZoho(admin, conn, "s1", [
       { sku: "A", price: 10, promotional_price: 8 },
       { sku: "B", price: 20, promotional_price: null },
     ]);
@@ -63,7 +61,7 @@ describe("applyPricesToZoho", () => {
 
   it("omite SKU sin mapeo (aviso en log) y no cuenta error", async () => {
     h.query.mockResolvedValue({ rows: [] });
-    const r = await applyPricesToZoho(admin, "s1", [{ sku: "X", price: 1, promotional_price: null }]);
+    const r = await applyPricesToZoho(admin, conn, "s1", [{ sku: "X", price: 1, promotional_price: null }]);
     expect(r).toEqual({ updated: 0, errors: 0 });
     expect(h.zohoFetch).not.toHaveBeenCalled();
     expect(h.logSync).toHaveBeenCalledWith(admin, "s1", expect.objectContaining({ operation: "price_from_tn", status: "skipped" }));
@@ -72,7 +70,7 @@ describe("applyPricesToZoho", () => {
   it("cuenta errores por SKU (respuesta no ok o excepción) sin lanzar", async () => {
     h.query.mockResolvedValue({ rows: [{ zoho_item_id: "z1" }] });
     h.zohoFetch.mockResolvedValueOnce(new Response("no", { status: 400 })).mockRejectedValueOnce(new Error("red"));
-    const r = await applyPricesToZoho(admin, "s1", [
+    const r = await applyPricesToZoho(admin, conn, "s1", [
       { sku: "A", price: 1, promotional_price: null },
       { sku: "B", price: 2, promotional_price: null },
     ]);
@@ -80,13 +78,8 @@ describe("applyPricesToZoho", () => {
     expect(h.logSync).toHaveBeenCalledWith(admin, "s1", expect.objectContaining({ operation: "price_from_tn", status: "error" }));
   });
 
-  it("lanza si la conexión con Zoho no está disponible", async () => {
-    h.getZohoConnection.mockRejectedValue(new Error("Zoho no está conectado"));
-    await expect(applyPricesToZoho(admin, "s1", [{ sku: "A", price: 1, promotional_price: null }])).rejects.toThrow("Zoho");
-  });
-
   it("sin cambios no toca Zoho", async () => {
-    expect(await applyPricesToZoho(admin, "s1", [])).toEqual({ updated: 0, errors: 0 });
-    expect(h.getZohoConnection).not.toHaveBeenCalled();
+    expect(await applyPricesToZoho(admin, conn, "s1", [])).toEqual({ updated: 0, errors: 0 });
+    expect(h.zohoFetch).not.toHaveBeenCalled();
   });
 });
