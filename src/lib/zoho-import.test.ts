@@ -1,6 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
-const { tnFetch, logSync, locs, zoho } = vi.hoisted(() => ({
+const { tnFetch, logSync, locs, zoho, cache } = vi.hoisted(() => ({
+  cache: { catalog: [] as any[], loads: 0 },
   tnFetch: vi.fn(),
   logSync: vi.fn(async () => {}),
   locs: { mappings: [] as any[], tn: null as any[] | null },
@@ -8,6 +9,9 @@ const { tnFetch, logSync, locs, zoho } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../server/functions/_shared/tiendanube.js', () => ({ tnFetchWithRetry: tnFetch }));
+vi.mock('../../server/functions/_shared/tn-catalog.js', () => ({
+  loadCatalog: async () => { cache.loads++; return cache.catalog; },
+}));
 vi.mock('../../server/functions/_shared/locations.js', () => ({
   ZOHO_TOTAL: '__total__',
   loadLocationMappings: async () => locs.mappings,
@@ -53,6 +57,8 @@ beforeEach(() => {
   zoho.groupItems = null;
   zoho.child = {};
   zoho.childCalls = [];
+  cache.catalog = [];
+  cache.loads = 0;
   vi.unstubAllGlobals();
 });
 
@@ -311,4 +317,47 @@ test('PATCH stock-price falla: el ítem es error con lo aplicado y las imágenes
   const all = calls();
   expect(all.filter((c) => c.path === '/products/456/images')).toHaveLength(1);
   expect(all.findIndex((c) => c.path === '/products/456/images')).toBeLessThan(all.findIndex((c) => c.path === '/products/stock-price'));
+});
+
+const noStockItem = () => Response.json({ item: { item_id: 'zoho-1', name: 'Servicio', sku: 'TEST-1', rate: 200 } });
+
+test('alta sin stock en Zoho (servicio): no envía inventory_levels, avisa y sí envía el precio', async () => {
+  tnProducts();
+  locs.tn = [{ id: 'L1' }];
+  zoho.child['/inventory/v1/items/zoho-1'] = noStockItem;
+  const result = await run({ items: [{ zoho_item_id: 'zoho-1', action: 'create' }] });
+  expect(result.status).toBe('success');
+  const variant = calls().find((c) => c.path === '/products')!.body.variants[0];
+  expect(variant).not.toHaveProperty('inventory_levels');
+  expect(variant.price).toBe('200');
+  expect(result.message).toContain('stock no disponible: el stock no se envió');
+});
+
+test('update sin stock en Zoho: el PATCH lleva solo el precio, nunca stock 0', async () => {
+  tnProducts();
+  locs.tn = [{ id: 'L1' }];
+  zoho.child['/inventory/v1/items/zoho-1'] = () => Response.json({ item: { item_id: 'zoho-1', name: 'S', sku: 'TEST-1', rate: 200, stock_on_hand: '' } });
+  const result = await run({ items: [{ zoho_item_id: 'zoho-1', action: 'update', tiendanube_product_id: 456 }] });
+  expect(calls().find((c) => c.path === '/products/stock-price')!.body[0].variants[0]).toEqual({ id: 9, price: '200' });
+  expect(result.message).toContain('stock no disponible');
+});
+
+test('alta con /locations caído y sin mapeos: la caché revela 2 locations y no se envía stock sin location_id', async () => {
+  tnProducts();
+  locs.tn = null;
+  cache.catalog = [
+    { product_id: 1, variant_id: 1, sku: 'X', price: 1, promotional_price: null, inventory_levels: [{ location_id: 'L1', stock: 1 }] },
+    { product_id: 2, variant_id: 2, sku: 'Y', price: 1, promotional_price: null, inventory_levels: [{ location_id: 'L2', stock: 1 }] },
+  ];
+  const result = await run({ items: [{ zoho_item_id: 'zoho-1', action: 'create' }] });
+  expect(calls().find((c) => c.path === '/products')!.body.variants[0]).not.toHaveProperty('inventory_levels');
+  expect(result.message).toContain('locations sin mapear: el stock no se envió');
+  expect(cache.loads).toBe(1);
+});
+
+test('con /locations disponible no se lee la caché', async () => {
+  tnProducts();
+  locs.tn = [{ id: 'L1' }];
+  await run({ items: [{ zoho_item_id: 'zoho-1', action: 'create' }] });
+  expect(cache.loads).toBe(0);
 });

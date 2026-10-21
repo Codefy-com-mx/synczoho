@@ -25,6 +25,17 @@ export interface StockChange {
 
 const norm = (s: unknown) => (s ?? "").toString().trim().toUpperCase();
 
+const finite = (v: unknown): number | null => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "") return Number.isFinite(Number(v)) ? Number(v) : null;
+  return null;
+};
+
+/** Stock total de Zoho, o null si el ítem no lo trae (servicios, no inventariables): nunca se asume 0. */
+export function zohoTotal(item: { stock_on_hand?: unknown; actual_available_stock?: unknown }): number | null {
+  return finite(item.stock_on_hand) ?? finite(item.actual_available_stock);
+}
+
 /** Cruza ítems de Zoho con variantes del catálogo por SKU (la primera variante por SKU gana). */
 export function matchBySku(zohoItems: ZohoStockItem[], catalog: CatalogVariant[]) {
   const bySku = new Map<string, CatalogVariant>();
@@ -96,19 +107,27 @@ export function planStockChanges(input: {
     });
   };
 
+  // Dos ítems de Zoho con el mismo SKU: gana el primero (como "la primera variante por SKU gana"),
+  // si no, el mismo (variante, location) iría dos veces en el PATCH y saldría "actualizado" en cada corrida.
+  const seenVariants = new Set<number>();
   for (const { item, variant } of pairs) {
-    const zohoTotal = Number(item.stock_on_hand ?? item.actual_available_stock ?? 0);
+    if (seenVariants.has(variant.variant_id)) continue;
+    seenVariants.add(variant.variant_id);
+    const total = zohoTotal(item);
     if (linked.length === 0) {
       // Camino legado (una sola location o sin scope): stock total, Tiendanube usa su primera location.
+      // Sin stock en Zoho (servicio, no inventariable) no se toca: nunca se escribe 0 por falta de dato.
+      if (total === null) continue;
       const tnQty = variant.inventory_levels.reduce((sum, l) => sum + l.stock, 0);
-      add(item, variant, null, null, zohoTotal, tnQty);
+      add(item, variant, null, null, total, tnQty);
       continue;
     }
     for (const m of linked) {
       if (m.zoho_location_id === ZOHO_TOTAL) {
         // Org sin multi-almacén: esta location de Tiendanube lleva el total de Zoho (sin location de Zoho).
+        if (total === null) continue;
         const tl = variant.inventory_levels.find((l) => l.location_id === m.tn_location_id);
-        add(item, variant, m.tn_location_id, null, zohoTotal, tl?.stock ?? 0);
+        add(item, variant, m.tn_location_id, null, total, tl?.stock ?? 0);
         continue;
       }
       // Sin datos por location en Zoho no se sabe cuánto hay en cada almacén: no se toca.
@@ -143,7 +162,7 @@ export function buildStockPatch(
  * vínculos reales a la vez tampoco. Si `levels` viene vacío, `warning` dice por qué.
  */
 export function resolveInitialLevels(input: {
-  total: number;
+  total: number | null; // null = Zoho no trae stock (servicio, no inventariable)
   zohoLocations?: Array<{ location_id: string; stock: number }>;
   mappings: LocationMapping[];
   tnLocationCount: number | null;
@@ -156,8 +175,10 @@ export function resolveInitialLevels(input: {
   }
   if (linked.length === 0) {
     if ((input.tnLocationCount ?? 0) >= 2) return { levels: [], warning: "locations sin mapear" };
+    if (input.total === null) return { levels: [], warning: "stock no disponible" };
     return { levels: [{ stock: qty(input.total) }] };
   }
+  if (hasTotal && input.total === null) return { levels: [], warning: "stock no disponible" };
   // Sin lista por almacén recibida (o vacía) no se sabe cuánto hay: nunca se asume 0 sobre una tienda en vivo.
   if (!hasTotal && !input.zohoLocations?.length) return { levels: [], warning: "stock por almacén no disponible" };
   return {

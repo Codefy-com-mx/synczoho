@@ -11,7 +11,8 @@ import { corsHeaders, getAdminClient, getZohoConnection, getValidAccessToken, IN
 import { encodeBase64 } from "../../base64.js";
 import { tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings, type LocationMapping } from "../_shared/locations.js";
-import { deriveTnLocationCount, resolveInitialLevels } from "../_shared/stock-plan.js";
+import { deriveTnLocationCount, resolveInitialLevels, zohoTotal } from "../_shared/stock-plan.js";
+import { loadCatalog } from "../_shared/tn-catalog.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
 type StockCtx = { mappings: LocationMapping[]; tnLocations: unknown[] | null; tnLocationCount: number | null };
@@ -46,7 +47,7 @@ interface ZohoVariantData {
   sku: string | null;
   rate: number;           // precio de lista (price en TN)
   sales_rate: number | null; // precio de venta (promotional_price en TN si distinto de rate)
-  stock_on_hand: number;
+  stock_on_hand: number | null; // null: Zoho no trae stock (servicio, no inventariable), nunca se asume 0
   locations?: Array<{ location_id: string; stock: number }>; // stock por almacén de Zoho (si viene)
   weight: number | null;
   length: number | null;
@@ -115,7 +116,10 @@ export default serve(async (req) => {
     const stockCtx: StockCtx = {
       mappings,
       tnLocations,
-      tnLocationCount: needsStock ? deriveTnLocationCount(tnLocations, mappings, []) : null,
+      // Si /locations falló, la caché revela si hay varias locations: nunca se manda stock sin location_id a ciegas.
+      tnLocationCount: needsStock
+        ? deriveTnLocationCount(tnLocations, mappings, tnLocations ? [] : await loadCatalog(storeId))
+        : null,
     };
     const needZohoLocations = needsStock && mappings.some((m) => m.zoho_location_id && m.zoho_location_id !== ZOHO_TOTAL);
 
@@ -378,7 +382,7 @@ async function loadZohoProduct(
         // sales_rate es el precio de venta real; si difiere del rate (precio de lista),
         // se mapea como promotional_price en TN
         sales_rate: salesRate !== null && salesRate !== rate ? salesRate : null,
-        stock_on_hand: Number(it.stock_on_hand ?? it.actual_available_stock ?? 0),
+        stock_on_hand: zohoTotal(it),
         locations: zohoLocations(it),
         weight: it.weight != null ? Number(it.weight) : null,
         length: it.length != null ? Number(it.length) : null,
@@ -428,7 +432,7 @@ async function loadZohoProduct(
       sku: it.sku || null,
       rate,
       sales_rate: salesRate !== null && salesRate !== rate ? salesRate : null,
-      stock_on_hand: Number(it.stock_on_hand ?? 0),
+      stock_on_hand: zohoTotal(it),
       locations: zohoLocations(it),
       weight: it.weight != null ? Number(it.weight) : null,
       length: it.length != null ? Number(it.length) : null,

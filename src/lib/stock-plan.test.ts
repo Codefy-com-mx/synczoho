@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStockPatch, deriveTnLocationCount, planStockChanges, resolveInitialLevels, type ZohoStockItem } from "../../server/functions/_shared/stock-plan";
+import { buildStockPatch, deriveTnLocationCount, planStockChanges, resolveInitialLevels, zohoTotal, type ZohoStockItem } from "../../server/functions/_shared/stock-plan";
 import type { CatalogVariant } from "../../server/functions/_shared/tn-catalog";
 import { ZOHO_TOTAL, type LocationMapping } from "../../server/functions/_shared/locations";
 
@@ -267,5 +267,98 @@ describe("resolveInitialLevels", () => {
     expect(resolveInitialLevels({
       total: 1, zohoLocations: [{ location_id: "Z1", stock: -2.5 }], mappings: [mapping("L1", "Z1")], tnLocationCount: 1,
     }).levels).toEqual([{ location_id: "L1", stock: 0 }]);
+  });
+});
+
+describe("zohoTotal", () => {
+  it("only finite numbers or non-empty numeric strings count", () => {
+    expect(zohoTotal({ stock_on_hand: 4 })).toBe(4);
+    expect(zohoTotal({ stock_on_hand: 0 })).toBe(0);
+    expect(zohoTotal({ stock_on_hand: "0" } as any)).toBe(0);
+    expect(zohoTotal({ stock_on_hand: " 7.5 " } as any)).toBe(7.5);
+    expect(zohoTotal({ actual_available_stock: 3 })).toBe(3);
+    expect(zohoTotal({ stock_on_hand: "" as any, actual_available_stock: 3 })).toBe(3);
+    expect(zohoTotal({})).toBeNull();
+    expect(zohoTotal({ stock_on_hand: "" } as any)).toBeNull();
+    expect(zohoTotal({ stock_on_hand: null } as any)).toBeNull();
+    expect(zohoTotal({ stock_on_hand: "abc" } as any)).toBeNull();
+  });
+});
+
+describe("planStockChanges without a Zoho stock value (service / non-tracked items)", () => {
+  const cases = [
+    { name: "zoho_to_tn legacy", direction: "zoho_to_tn" as const, priority: "zoho" as const, mappings: [] as LocationMapping[] },
+    { name: "bidirectional legacy", direction: "bidirectional" as const, priority: "zoho" as const, mappings: [] as LocationMapping[] },
+    { name: "bidirectional tiendanube priority", direction: "bidirectional" as const, priority: "tiendanube" as const, mappings: [] as LocationMapping[] },
+    { name: "ZOHO_TOTAL", direction: "zoho_to_tn" as const, priority: "zoho" as const, mappings: [mapping("L1", ZOHO_TOTAL)] },
+  ];
+  for (const c of cases) {
+    for (const extra of [{}, { stock_on_hand: "" }, { stock_on_hand: null }]) {
+      it(`${c.name} ${JSON.stringify(extra)}: no change, never 0`, () => {
+        const plan = planStockChanges({
+          direction: c.direction, priority: c.priority, mappings: c.mappings, tnLocationCount: 1,
+          zohoItems: [{ item_id: "z1", sku: "SKU-1", ...extra } as any],
+          catalog: [variant("SKU-1", [["L1", 12]])],
+        });
+        expect(plan.changes).toEqual([]);
+        expect(plan.inSync).toBe(0);
+      });
+    }
+  }
+
+  it.each([0, "0"])("a genuine Zoho 0 (%j) still produces a change to 0", (stock) => {
+    for (const mappings of [[], [mapping("L1", ZOHO_TOTAL)]]) {
+      const plan = planStockChanges({
+        ...base, mappings, tnLocationCount: 1,
+        zohoItems: [{ item_id: "z1", sku: "SKU-1", stock_on_hand: stock } as any],
+        catalog: [variant("SKU-1", [["L1", 12]])],
+      });
+      expect(plan.changes.map((ch) => [ch.from, ch.to])).toEqual([[12, 0]]);
+    }
+  });
+});
+
+describe("planStockChanges with two Zoho items sharing a SKU", () => {
+  it.each([
+    ["legacy", [] as LocationMapping[]],
+    ["ZOHO_TOTAL", [mapping("L1", ZOHO_TOTAL)]],
+    ["real locations", [mapping("L1", "ZA")]],
+  ])("%s: the first Zoho item wins, one entry per variant/location", (_n, mappings) => {
+    const plan = planStockChanges({
+      ...base, mappings, tnLocationCount: 1,
+      zohoItems: [
+        { item_id: "z1", sku: "SKU-1", stock_on_hand: 5, locations: [{ location_id: "ZA", location_stock_on_hand: 5 }] },
+        { item_id: "z2", sku: "sku-1", stock_on_hand: 9, locations: [{ location_id: "ZA", location_stock_on_hand: 9 }] },
+      ],
+      catalog: [variant("SKU-1", [["L1", 3]])],
+    });
+    expect(plan.changes.map((ch) => [ch.zoho_item_id, ch.to])).toEqual([["z1", 5]]);
+    expect(buildStockPatch(plan.changes)[0].variants[0].inventory_levels).toHaveLength(1);
+  });
+
+  it("once in sync with the first item, a duplicate does not report a change every run", () => {
+    const plan = planStockChanges({
+      ...base, mappings: [], tnLocationCount: 1,
+      zohoItems: [{ item_id: "z1", sku: "SKU-1", stock_on_hand: 3 }, { item_id: "z2", sku: "SKU-1", stock_on_hand: 9 }],
+      catalog: [variant("SKU-1", [["L1", 3]])],
+    });
+    expect(plan.changes).toEqual([]);
+    expect(plan.inSync).toBe(1);
+  });
+});
+
+describe("resolveInitialLevels without a Zoho total", () => {
+  it.each([
+    ["legacy", [] as LocationMapping[]],
+    ["ZOHO_TOTAL", [mapping("L1", ZOHO_TOTAL)]],
+  ])("%s: no levels and 'stock no disponible'", (_n, mappings) => {
+    expect(resolveInitialLevels({ total: null, mappings, tnLocationCount: 1 }))
+      .toEqual({ levels: [], warning: "stock no disponible" });
+  });
+
+  it("real locations do not need the total", () => {
+    expect(resolveInitialLevels({
+      total: null, zohoLocations: [{ location_id: "Z1", stock: 4 }], mappings: [mapping("L1", "Z1")], tnLocationCount: 1,
+    }).levels).toEqual([{ location_id: "L1", stock: 4 }]);
   });
 });
