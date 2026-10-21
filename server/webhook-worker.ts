@@ -10,9 +10,10 @@ interface EventRow {
   attempts: number;
 }
 
-const storeTables = [
+export const storeTables = [
   "products", "zoho_connections", "product_sync_map", "sync_logs", "sync_settings",
-  "order_sync_map", "customer_sync_map", "stock_sync_state", "category_mappings", "stores",
+  "order_sync_map", "customer_sync_map", "stock_sync_state", "category_mappings",
+  "tn_variants", "tn_categories", "location_mappings", "stores",
 ];
 
 async function sendPrivacyEmail(to: string, subject: string, message: string): Promise<void> {
@@ -56,6 +57,9 @@ async function processEvent(row: EventRow): Promise<void> {
   if (event === "app/uninstalled") {
     await pool.query("DELETE FROM zoho_connections WHERE store_id=$1", [storeId]);
     await pool.query("DELETE FROM zoho_oauth_states WHERE store_id=$1", [storeId]);
+    for (const table of ["tn_variants", "tn_categories", "location_mappings"]) {
+      await pool.query(`DELETE FROM ${table} WHERE store_id=$1`, [storeId]);
+    }
     await pool.query("DELETE FROM stores WHERE store_id=$1", [storeId]);
     return;
   }

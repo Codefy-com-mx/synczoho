@@ -25,6 +25,9 @@ export default serve(async (req) => {
       admin.from("zoho_connections").delete().eq("store_id", store_id),
       admin.from("sync_settings").delete().eq("store_id", store_id),
       admin.from("sync_logs").delete().eq("store_id", store_id),
+      admin.from("tn_variants").delete().eq("store_id", store_id),
+      admin.from("tn_categories").delete().eq("store_id", store_id),
+      admin.from("location_mappings").delete().eq("store_id", store_id),
     ]);
 
     // Eliminar la tienda al final (foreign keys dependen de store_id)
