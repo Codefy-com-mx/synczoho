@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   enqueueBackfill: vi.fn(),
   syncStoreWebhooks: vi.fn(),
+  order: [] as string[],
   queries: [] as Array<{ text: string; values: any[] }>,
   stores: [] as any[],
   logs: [] as any[],
@@ -11,6 +12,7 @@ const h = vi.hoisted(() => ({
 vi.mock("../../server/db.js", () => ({
   getPool: () => ({
     query: async (text: string, values: any[] = []) => {
+      h.order.push(`sql:${text.trim().split(/\s+/)[0]}`);
       h.queries.push({ text, values });
       if (/SELECT store_id, access_token/.test(text)) return { rows: h.stores, rowCount: h.stores.length };
       if (/^UPDATE/.test(text)) return { rows: [{ catalog_status: "pending", catalog_synced_at: null }], rowCount: 1 };
@@ -40,9 +42,10 @@ const call = (body: unknown) =>
 
 beforeEach(() => {
   h.queries.length = 0;
+  h.order = [];
   h.logs = [];
   h.stores = [];
-  h.enqueueBackfill.mockReset().mockResolvedValue(true);
+  h.enqueueBackfill.mockReset().mockImplementation(async () => { h.order.push("enqueue"); return true; });
   h.syncStoreWebhooks.mockReset().mockResolvedValue({ created: [], deleted: 0, errors: [] });
 });
 
@@ -62,6 +65,36 @@ describe("catalog-resync", () => {
     expect(await response.json()).toEqual({ catalog_status: "ready", catalog_synced_at: "2026-10-21T10:00:00Z" });
     expect(h.enqueueBackfill).not.toHaveBeenCalled();
     expect(h.queries.every((q) => !/UPDATE/.test(q.text))).toBe(true);
+    expect(h.order).toEqual(["sql:SELECT"]);
+  });
+
+  it("does not touch the status when the enqueue throws", async () => {
+    h.enqueueBackfill.mockRejectedValue(new Error("db down"));
+
+    const response = await call({ storeId: "s1", action: "resync" });
+
+    expect(response.status).toBe(500);
+    expect(h.queries.some((q) => /UPDATE stores/.test(q.text))).toBe(false);
+  });
+
+  it("sets pending only after a successful enqueue", async () => {
+    await call({ storeId: "s1", action: "resync" });
+
+    expect(h.order).toEqual(["enqueue", "sql:UPDATE"]);
+    expect(h.queries.some((q) => /next_attempt_at/.test(q.text))).toBe(false);
+  });
+
+  it("pulls forward an existing unprocessed backfill, scoped to the store, then sets pending", async () => {
+    h.enqueueBackfill.mockImplementation(async () => { h.order.push("enqueue"); return false; });
+
+    const response = await call({ storeId: "s1", action: "resync" });
+
+    expect(response.status).toBe(200);
+    const pull = h.queries.find((q) => /next_attempt_at = now\(\)/.test(q.text))!;
+    expect(pull.text).toMatch(/store_id = \$1 AND event_type = 'internal\/backfill' AND processed = false/);
+    expect(pull.values).toEqual(["s1"]);
+    expect(h.queries.map((q) => q.text.match(/UPDATE (\w+)/)?.[1])).toEqual(["webhook_events", "stores"]);
+    expect(h.order).toEqual(["enqueue", "sql:UPDATE", "sql:UPDATE"]);
   });
 
   it("rejects a missing storeId", async () => {
