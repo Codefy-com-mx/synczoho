@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
+  writes: [] as Array<{ op: string; values: any }>,
+  existing: false,
   syncStoreWebhooks: vi.fn(),
   enqueueBackfill: vi.fn(),
   logs: [] as any[],
@@ -13,9 +15,9 @@ vi.mock("../../server/functions/_shared/zoho.js", () => ({
       const builder: Record<string, any> = {};
       builder.select = () => builder;
       builder.eq = () => builder;
-      builder.maybeSingle = async () => ({ data: null, error: null });
-      builder.insert = async () => ({ error: null });
-      builder.update = () => builder;
+      builder.maybeSingle = async () => ({ data: h.existing ? { id: 1 } : null, error: null });
+      builder.insert = async (values: any) => { h.writes.push({ op: "insert", values }); return { error: null }; };
+      builder.update = (values: any) => { h.writes.push({ op: "update", values }); return builder; };
       return builder;
     },
   }),
@@ -34,6 +36,8 @@ vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
 
 import handler from "../../server/functions/tiendanube-auth/index";
 
+let tokenScope: unknown;
+
 function install() {
   return handler(new Request("https://app.example.com/api/functions/v1/tiendanube-auth", {
     method: "POST",
@@ -46,11 +50,14 @@ beforeEach(() => {
   process.env.TIENDANUBE_CLIENT_SECRET = "secret";
   process.env.APP_URL = "https://app.example.com/";
   h.logs = [];
+  h.writes = [];
+  h.existing = false;
+  tokenScope = undefined;
   h.syncStoreWebhooks.mockReset().mockResolvedValue({ created: [], deleted: 0, errors: [] });
   h.enqueueBackfill.mockReset().mockResolvedValue(true);
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
     if (input.endsWith("/apps/authorize/token")) {
-      return Response.json({ access_token: "tn-token", user_id: 123 });
+      return Response.json({ access_token: "tn-token", user_id: 123, scope: tokenScope });
     }
     return Response.json({ name: { es: "Demo" }, original_domain: "demo" });
   }));
@@ -104,5 +111,30 @@ describe("tiendanube-auth", () => {
     expect(h.logs).toEqual([
       expect.objectContaining({ storeId: "123", operation: "catalog_backfill", status: "error" }),
     ]);
+  });
+
+  it("saves the granted scopes when inserting a new store", async () => {
+    tokenScope = "read_products,write_products";
+
+    await install();
+
+    expect(h.writes).toEqual([{ op: "insert", values: expect.objectContaining({ scopes: "read_products,write_products" }) }]);
+  });
+
+  it("saves the granted scopes when re-installing an existing store", async () => {
+    h.existing = true;
+    tokenScope = "read_products,write_products,read_locations";
+
+    await install();
+
+    expect(h.writes).toEqual([{ op: "update", values: expect.objectContaining({ scopes: "read_products,write_products,read_locations" }) }]);
+  });
+
+  it("stores null, never the string 'undefined', when the token has no scope", async () => {
+    await install();
+    h.existing = true;
+    await install();
+
+    expect(h.writes.map((w) => w.values.scopes)).toEqual([null, null]);
   });
 });

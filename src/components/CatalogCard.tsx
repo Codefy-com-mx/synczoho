@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Box, Card, Title, Text, Tag, Button, Spinner } from '@nimbus-ds/components';
+import { Alert, Box, Card, Title, Text, Tag, Button, Spinner } from '@nimbus-ds/components';
 import { RedoIcon } from '@nimbus-ds/icons';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -19,6 +19,7 @@ export function CatalogCard({ storeId }: Props) {
   const [resyncing, setResyncing] = useState(false);
   const [status, setStatus] = useState<CatalogStatus>('pending');
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [missingScopes, setMissingScopes] = useState<string[]>([]);
 
   const call = async (action: 'status' | 'resync') => {
     const { data, error } = await api.functions.invoke('catalog-resync', { body: { storeId, action } });
@@ -26,6 +27,7 @@ export function CatalogCard({ storeId }: Props) {
     if (data?.error) throw new Error(data.error);
     setStatus(data.catalog_status);
     setSyncedAt(data.catalog_synced_at ?? null);
+    setMissingScopes(data.missing_scopes ?? []);
   };
 
   useEffect(() => {
@@ -68,6 +70,14 @@ export function CatalogCard({ storeId }: Props) {
                 ? ` Última sincronización: ${new Date(syncedAt).toLocaleString('es-AR')}.`
                 : ' Todavía no se sincronizó.'}
             </Text>
+            {missingScopes.length > 0 && (
+              <Alert appearance="warning" title="Reautoriza la app para habilitar MultiCD">
+                <Text fontSize="caption">
+                  Faltan permisos: {missingScopes.join(', ')}. Abre la app de nuevo desde el administrador de Tiendanube
+                  y acepta los nuevos permisos para poder sincronizar varias ubicaciones.
+                </Text>
+              </Alert>
+            )}
             <Box>
               <Button appearance="neutral" onClick={resync} disabled={resyncing}>
                 {resyncing ? <Spinner size="small" /> : <RedoIcon />}

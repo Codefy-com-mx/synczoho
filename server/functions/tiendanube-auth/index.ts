@@ -81,7 +81,8 @@ export default serve(async (req) => {
       console.log('Store handle/domain:', storeHandle);
     }
 
-    // Save to database
+    // Save to database. `scope` llega como "read_products,write_products,..."; sin valor queda null.
+    const scopes = typeof tokenData.scope === 'string' && tokenData.scope ? tokenData.scope : null;
     const database = getAdminClient();
 
     const { data: existingStore } = await database
@@ -96,6 +97,7 @@ export default serve(async (req) => {
         .update({
           access_token: tokenData.access_token,
           store_name: storeName,
+          scopes,
         })
         .eq('store_id', storeId.toString());
 
@@ -108,6 +110,7 @@ export default serve(async (req) => {
           store_id: storeId.toString(),
           access_token: tokenData.access_token,
           store_name: storeName,
+          scopes,
         });
 
       if (insertError) throw insertError;

@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   queries: [] as Array<{ text: string; values: any[] }>,
   stores: [] as any[],
   logs: [] as any[],
+  scopes: null as string | null,
 }));
 
 vi.mock("../../server/db.js", () => ({
@@ -15,8 +16,8 @@ vi.mock("../../server/db.js", () => ({
       h.order.push(`sql:${text.trim().split(/\s+/)[0]}`);
       h.queries.push({ text, values });
       if (/SELECT store_id, access_token/.test(text)) return { rows: h.stores, rowCount: h.stores.length };
-      if (/^UPDATE/.test(text)) return { rows: [{ catalog_status: "pending", catalog_synced_at: null }], rowCount: 1 };
-      return { rows: [{ catalog_status: "ready", catalog_synced_at: "2026-10-21T10:00:00Z" }], rowCount: 1 };
+      if (/^UPDATE/.test(text)) return { rows: [{ catalog_status: "pending", catalog_synced_at: null, scopes: h.scopes }], rowCount: 1 };
+      return { rows: [{ catalog_status: "ready", catalog_synced_at: "2026-10-21T10:00:00Z", scopes: h.scopes }], rowCount: 1 };
     },
   }),
 }));
@@ -45,6 +46,7 @@ beforeEach(() => {
   h.order = [];
   h.logs = [];
   h.stores = [];
+  h.scopes = null;
   h.enqueueBackfill.mockReset().mockImplementation(async () => { h.order.push("enqueue"); return true; });
   h.syncStoreWebhooks.mockReset().mockResolvedValue({ created: [], deleted: 0, errors: [] });
 });
@@ -62,10 +64,34 @@ describe("catalog-resync", () => {
   it("status only reads and never enqueues", async () => {
     const response = await call({ storeId: "s1", action: "status" });
 
-    expect(await response.json()).toEqual({ catalog_status: "ready", catalog_synced_at: "2026-10-21T10:00:00Z" });
+    expect(await response.json()).toEqual({
+      catalog_status: "ready",
+      catalog_synced_at: "2026-10-21T10:00:00Z",
+      missing_scopes: ["read_products", "write_products", "read_locations", "read_fulfillment_orders"],
+    });
     expect(h.enqueueBackfill).not.toHaveBeenCalled();
     expect(h.queries.every((q) => !/UPDATE/.test(q.text))).toBe(true);
     expect(h.order).toEqual(["sql:SELECT"]);
+  });
+
+  it("status reports the scopes missing from stores.scopes", async () => {
+    h.scopes = "read_products,write_products";
+    expect((await (await call({ storeId: "s1", action: "status" })).json()).missing_scopes).toEqual([
+      "read_locations",
+      "read_fulfillment_orders",
+    ]);
+    expect(h.queries[0].text).toMatch(/SELECT [^;]*\bscopes\b/);
+
+    h.scopes = "read_products,write_products,read_locations,read_fulfillment_orders";
+    expect((await (await call({ storeId: "s1", action: "status" })).json()).missing_scopes).toEqual([]);
+  });
+
+  it("resync also reports the missing scopes", async () => {
+    h.scopes = "read_products,write_products,read_locations";
+    const body = await (await call({ storeId: "s1", action: "resync" })).json();
+
+    expect(body.missing_scopes).toEqual(["read_fulfillment_orders"]);
+    expect(h.queries.find((q) => /UPDATE stores/.test(q.text))!.text).toMatch(/RETURNING [^;]*\bscopes\b/);
   });
 
   it("does not touch the status when the enqueue throws", async () => {

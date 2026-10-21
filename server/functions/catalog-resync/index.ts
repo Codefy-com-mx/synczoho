@@ -1,9 +1,10 @@
 import { serve } from "../../runtime.js";
 // Estado y resincronización del catálogo local de Tiendanube.
-// POST { storeId, action?: "status" | "resync" } → { catalog_status, catalog_synced_at }
+// POST { storeId, action?: "status" | "resync" } → { catalog_status, catalog_synced_at, missing_scopes }
 import { getPool } from "../../db.js";
 import { corsHeaders } from "../_shared/zoho.js";
 import { enqueueBackfill } from "../_shared/tn-catalog.js";
+import { missingScopes } from "../_shared/scopes.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -30,12 +31,16 @@ export default serve(async (req) => {
     }
     const { rows } = action === "resync"
       ? await pool.query(
-          "UPDATE stores SET catalog_status = 'pending' WHERE store_id = $1 RETURNING catalog_status, catalog_synced_at",
+          "UPDATE stores SET catalog_status = 'pending' WHERE store_id = $1 RETURNING catalog_status, catalog_synced_at, scopes",
           [id],
         )
-      : await pool.query("SELECT catalog_status, catalog_synced_at FROM stores WHERE store_id = $1", [id]);
+      : await pool.query("SELECT catalog_status, catalog_synced_at, scopes FROM stores WHERE store_id = $1", [id]);
     if (!rows[0]) return json({ error: "Tienda no encontrada" }, 404);
-    return json({ catalog_status: rows[0].catalog_status, catalog_synced_at: rows[0].catalog_synced_at });
+    return json({
+      catalog_status: rows[0].catalog_status,
+      catalog_synced_at: rows[0].catalog_synced_at,
+      missing_scopes: missingScopes(rows[0].scopes),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error";
     console.error("catalog-resync error", msg);

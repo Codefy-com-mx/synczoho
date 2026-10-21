@@ -23,4 +23,28 @@ describe('CatalogCard', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     expect(invoke.mock.calls[1][1]).toMatchObject({ body: { storeId: 'store-1', action: 'resync' } });
   });
+
+  it('pide reautorizar la app cuando faltan scopes', async () => {
+    invoke.mockResolvedValueOnce({
+      data: { catalog_status: 'ready', catalog_synced_at: null, missing_scopes: ['read_locations', 'read_fulfillment_orders'] },
+      error: null,
+    });
+
+    render(<CatalogCard storeId="store-1" />);
+
+    expect(await screen.findByText(/Reautoriza la app para habilitar MultiCD/)).toBeInTheDocument();
+    expect(screen.getByText(/read_locations, read_fulfillment_orders/)).toBeInTheDocument();
+  });
+
+  it('no muestra el aviso cuando no faltan scopes', async () => {
+    invoke.mockResolvedValueOnce({
+      data: { catalog_status: 'ready', catalog_synced_at: null, missing_scopes: [] },
+      error: null,
+    });
+
+    render(<CatalogCard storeId="store-1" />);
+
+    await screen.findByText('Al día');
+    expect(screen.queryByText(/Reautoriza la app/)).not.toBeInTheDocument();
+  });
 });
