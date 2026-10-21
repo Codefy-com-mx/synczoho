@@ -34,6 +34,7 @@ export function renderStatusPage(): string {
     var details = document.getElementById("details");
     details.textContent = "";
     [
+      ["Versión", data.version || "unknown"],
       ["Base de datos", data.database === "ok" ? "Operativa" : "Caída"],
       ["Eventos pendientes", data.queue.pending],
       ["Antigüedad del más viejo (s)", data.queue.oldest_pending_seconds],
@@ -48,7 +49,7 @@ export function renderStatusPage(): string {
     fetch("/api/status", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(show)
-      .catch(function () { show({ status: "down", database: "down", queue: { pending: 0, oldest_pending_seconds: 0, failed: 0 }, stale_catalogs: 0, scheduler: {}, checked_at: new Date().toISOString() }); });
+      .catch(function () { show({ status: "down", version: "unknown", database: "down", queue: { pending: 0, oldest_pending_seconds: 0, failed: 0 }, stale_catalogs: 0, scheduler: {}, checked_at: new Date().toISOString() }); });
   }
   load();
   setInterval(load, 30000);

@@ -159,7 +159,13 @@ const server = createServer(async (request, response) => {
       response.end(request.method === "HEAD" ? undefined : renderStatusPage());
       return;
     }
-    const report = await getStatus();
+    let report: Awaited<ReturnType<typeof getStatus>> | { status: "down" };
+    try {
+      report = await getStatus();
+    } catch (error) {
+      console.error("Status check failed", error instanceof Error ? error.name : "unknown");
+      report = { status: "down" };
+    }
     applySecurityHeaders(response);
     response.writeHead(statusHttpCode(report.status), { "Content-Type": "application/json; charset=utf-8" });
     response.end(request.method === "HEAD" ? undefined : JSON.stringify(report));
