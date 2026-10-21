@@ -76,6 +76,18 @@ describe('SyncStockView manual run', () => {
     expect(invoke).toHaveBeenCalledWith('sync-stock-run', { body: { storeId: 'store-1' } });
   });
 
+  it('explains a pending catalog on the stock run instead of claiming a run is in progress', async () => {
+    mockInvoke({ skipped: true, reason: 'catalog_not_ready' });
+
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await startSync();
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledTimes(1));
+    expect(toastInfo).toHaveBeenCalledWith(expect.stringContaining('catálogo de Tiendanube'));
+    expect(toastInfo).not.toHaveBeenCalledWith(expect.stringContaining('en curso'));
+  });
+
   it('keeps the completed result for a real run', async () => {
     mockInvoke({ dry_run: false, total: 3, updated: 2, inSync: 1, errors: 0, unmatched: 0, details: [] });
 
@@ -121,6 +133,32 @@ describe('SyncStockView automatic sync and prices', () => {
       fireEvent.change(screen.getByLabelText('Sincronización automática de precios'), { target: { value: 'daily' } });
     });
     expect(savedSettings().at(-1)).toMatchObject({ prices_enabled: true, prices_schedule: 'daily' });
+  });
+
+  const clickPrices = async () => {
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /Sincronizar precios/ }));
+    });
+  };
+
+  it('explains a pending catalog on the price run instead of claiming a run is in progress', async () => {
+    mockInvoke({ skipped: true, reason: 'catalog_not_ready' }, { ...settings, prices_enabled: true });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await clickPrices();
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledTimes(1));
+    expect(toastInfo).toHaveBeenCalledWith(expect.stringContaining('catálogo de Tiendanube'));
+    expect(toastInfo).not.toHaveBeenCalledWith(expect.stringContaining('en curso'));
+  });
+
+  it('keeps the in-progress message when the price run is already running', async () => {
+    mockInvoke({ skipped: true, reason: 'already_running' }, { ...settings, prices_enabled: true });
+    render(<SyncStockView storeId="store-1" />);
+    await act(async () => {});
+    await clickPrices();
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledWith(expect.stringContaining('en curso')));
   });
 
   it('runs the price sync on demand when prices are enabled', async () => {

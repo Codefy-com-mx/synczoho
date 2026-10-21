@@ -135,7 +135,8 @@ export async function refreshCategory(store: TiendanubeStore, categoryId: number
 export async function loadCatalog(storeId: string): Promise<CatalogVariant[]> {
   const { rows } = await getPool().query(
     `SELECT product_id, variant_id, sku, price, promotional_price, inventory_levels
-     FROM tn_variants WHERE store_id = $1 AND sku IS NOT NULL`,
+     FROM tn_variants WHERE store_id = $1 AND sku IS NOT NULL
+     ORDER BY product_id, variant_id`,
     [storeId],
   );
   return rows.map((r: any) => ({

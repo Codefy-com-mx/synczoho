@@ -163,5 +163,7 @@ describe("getCatalogStatus / loadCatalog", () => {
     expect(await loadCatalog("s1")).toEqual([
       { product_id: 5, variant_id: 6, sku: "A", price: 1.5, promotional_price: null, inventory_levels: [] },
     ]);
+    // Orden estable: con SKUs duplicados "la primera variante gana" debe ser determinista.
+    expect(sqls().at(-1)).toMatch(/ORDER BY product_id, variant_id/);
   });
 });

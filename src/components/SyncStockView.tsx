@@ -14,6 +14,8 @@ interface Props { storeId: string }
 
 type Schedule = 'disabled' | 'hourly' | 'every6h' | 'daily';
 
+const CATALOG_NOT_READY_MSG = 'El catálogo de Tiendanube aún se está sincronizando. Inténtalo de nuevo en unos minutos.';
+
 const scheduleOptions: Array<{ value: Schedule; label: string }> = [
   { value: 'disabled', label: 'Desactivada (solo manual)' },
   { value: 'hourly', label: 'Cada hora' },
@@ -77,7 +79,7 @@ export function SyncStockView({ storeId }: Props) {
       // A run refused by the single-flight lock is neither a success nor a
       // failure: inform the user without rendering a completed result.
       if (data?.skipped) {
-        toast.info('Ya hay una sincronización de stock en curso. Espera a que termine e inténtalo de nuevo.');
+        toast.info(data.reason === 'catalog_not_ready' ? CATALOG_NOT_READY_MSG : 'Ya hay una sincronización de stock en curso. Espera a que termine e inténtalo de nuevo.');
         return;
       }
       setProgress({ current: data.total || 0, total: data.total || 0 });
@@ -98,7 +100,7 @@ export function SyncStockView({ storeId }: Props) {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
       if (data?.skipped) {
-        toast.info('Ya hay una sincronización de precios en curso. Espera a que termine e inténtalo de nuevo.');
+        toast.info(data.reason === 'catalog_not_ready' ? CATALOG_NOT_READY_MSG : 'Ya hay una sincronización de precios en curso. Espera a que termine e inténtalo de nuevo.');
         return;
       }
       toast.success(`Precios sincronizados: ${data.updated} actualizados, ${data.errors} errores`);
