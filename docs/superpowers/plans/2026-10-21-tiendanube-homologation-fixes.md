@@ -237,6 +237,16 @@
 - [ ] **Step 5: Verify en staging** con la org de Zoho multi-location y la tienda de prueba con 2 locations: correr un sync y confirmar en el historial de Tiendanube un solo `PATCH /products/stock-price` con ambos `location_id`; si la lista de ítems de Zoho no trae `locations`, confirmar que el fallback por ítem funciona.
 - [ ] **Step 6: Commit** `feat(multicd): stock por location con inventory_levels`
 
+### Task 11b: Location que recibe el stock total (hueco del plan, regla del controlador)
+
+El diseño (sección B y "Decisiones tomadas por mí") exige que, con 2+ locations de Tiendanube y una org de Zoho sin locations, la UI pida mapear a mano la location que recibe el total. Ninguna tarea lo cubría: sin un `zoho_location_id` esas tiendas quedan bloqueadas para siempre.
+
+**Files:** `server/functions/_shared/locations.ts`, `server/functions/_shared/stock-plan.ts`, `server/functions/location-mappings/index.ts`, `server/functions/sync-stock-run/index.ts`, `src/components/LocationMappingsCard.tsx`; tests en `src/lib/locations.test.ts`, `src/lib/stock-plan.test.ts`, `src/lib/location-mappings.test.ts`, `src/lib/sync-stock-run.test.ts`, `src/components/LocationMappingsCard.test.tsx`.
+
+**Interfaces:** `export const ZOHO_TOTAL = "__total__"` en `locations.ts`; un mapeo con `zoho_location_id === ZOHO_TOTAL` significa "esta location de Tiendanube recibe el `stock_on_hand` total de Zoho". Como máximo una location de Tiendanube lo tiene y no puede convivir con vínculos a locations reales de Zoho. `sync-stock-run` devuelve `unmapped_locations: string[]` (ids de Tiendanube sin vincular cuando hay al menos un vínculo) y lo registra en `payload` del log final.
+
+- [ ] Tests primero (rojo), implementar, tests en verde, commit `feat(multicd): location que recibe el stock total sin multi-almacén en Zoho`.
+
 ### Task 12: Alta de productos con MultiCD e imágenes separadas
 
 **Files:**
