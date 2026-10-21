@@ -37,6 +37,24 @@ describe("diffPrices", () => {
   });
 });
 
+describe("diffPrices con precios inválidos", () => {
+  it.each([0, -5, NaN, null, ""])("nunca propone rate %j (la caché convierte null/\"\" en 0)", (price) => {
+    expect(diffPrices([v(1, 10, 8)], [v(1, price as any, 8)])).toEqual([]);
+  });
+
+  it("la promo que pasa a 0 se trata como null: se propone quitarla", () => {
+    expect(diffPrices([v(1, 10, 8)], [v(1, 10, 0)])).toEqual([{ sku: "SKU-1", price: 10, promotional_price: null }]);
+  });
+
+  it("promo 0 frente a null no es un cambio", () => {
+    expect(diffPrices([v(1, 10, null)], [v(1, 10, 0)])).toEqual([]);
+  });
+
+  it("al volver de un precio 0 a uno válido sí se propone", () => {
+    expect(diffPrices([v(1, 0)], [v(1, 15)])).toEqual([{ sku: "SKU-1", price: 15, promotional_price: null }]);
+  });
+});
+
 describe("applyPricesToZoho", () => {
   const admin = {} as any;
   const conn = { store_id: "s1" } as any;

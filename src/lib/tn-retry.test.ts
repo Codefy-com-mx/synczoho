@@ -8,6 +8,11 @@ describe("retryDelayMs", () => {
   it("429 usa Retry-After en segundos", () => {
     expect(retryDelayMs(429, 0, "3", r0)).toBe(3000);
   });
+  it("429 con Retry-After grande se limita a 60 s (antes del jitter)", () => {
+    expect(retryDelayMs(429, 0, "3600", r0)).toBe(60_000);
+    expect(retryDelayMs(429, 0, "60", r0)).toBe(60_000);
+    expect(retryDelayMs(429, 0, "59", r0)).toBe(59_000);
+  });
   it("429 sin Retry-After: 2000*2^attempt con tope 30000", () => {
     expect(retryDelayMs(429, 2, null, r0)).toBe(8000);
     expect(retryDelayMs(429, 10, null, r0)).toBe(30000);

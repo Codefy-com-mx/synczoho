@@ -15,14 +15,21 @@ export interface PriceChange {
 const differs = (a: number | null, b: number | null) =>
   a === null || b === null ? a !== b : Math.abs(a - b) >= EPSILON;
 
+const positive = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
+// Promo 0 o vacía equivale a sin promo.
+const promo = (n: number | null) => (positive(n) ? n : null);
+
 export function diffPrices(before: CatalogVariant[], after: CatalogVariant[]): PriceChange[] {
   const old = new Map(before.map((b) => [b.variant_id, b]));
   const out: PriceChange[] = [];
   for (const a of after) {
     const b = old.get(a.variant_id);
     if (!b) continue; // variante nueva: nada con qué comparar
-    if (differs(a.price, b.price) || differs(a.promotional_price, b.promotional_price)) {
-      out.push({ sku: a.sku, price: a.price, promotional_price: a.promotional_price });
+    // Un precio vacío/0 en Tiendanube (la caché lo guarda como 0) nunca se copia a Zoho como rate 0.
+    if (!positive(a.price)) continue;
+    const ap = promo(a.promotional_price);
+    if (differs(a.price, b.price) || differs(ap, promo(b.promotional_price))) {
+      out.push({ sku: a.sku, price: a.price, promotional_price: ap });
     }
   }
   return out;

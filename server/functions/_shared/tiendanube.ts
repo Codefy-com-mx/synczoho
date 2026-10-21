@@ -58,7 +58,7 @@ export interface RetryObserver {
 
 /**
  * Espera antes del reintento `attempt` (desde 0), o null si el status no es reintentable.
- * status 0 = error de red. 429: 2s·2^n (tope 30s) o Retry-After; 5xx/red: 0.5s·2^n (tope 8s).
+ * status 0 = error de red. 429: 2s·2^n (tope 30s) o Retry-After (tope 60s); 5xx/red: 0.5s·2^n (tope 8s).
  * Suma hasta 25% de jitter.
  */
 export function retryDelayMs(
@@ -70,7 +70,8 @@ export function retryDelayMs(
   let delay: number;
   if (status === 429) {
     const ra = Number(retryAfter);
-    delay = ra > 0 ? ra * 1000 : Math.min(2000 * 2 ** attempt, 30_000);
+    // Tope de 60 s: un Retry-After enorme frenaría el worker secuencial y retendría los locks de sync.
+    delay = ra > 0 ? Math.min(ra, 60) * 1000 : Math.min(2000 * 2 ** attempt, 30_000);
   } else if (status === 0 || [500, 502, 503, 504].includes(status)) {
     delay = Math.min(500 * 2 ** attempt, 8_000);
   } else {
