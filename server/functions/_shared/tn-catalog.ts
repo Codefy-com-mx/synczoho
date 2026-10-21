@@ -178,3 +178,14 @@ export async function enqueueBackfill(storeId: string): Promise<boolean> {
   );
   return (r.rowCount ?? 0) > 0;
 }
+
+// Con la tienda desconectada o desinstalada, los eventos de catálogo pendientes ya no pueden completarse.
+// Pedidos y solicitudes de privacidad NO se tocan: deben seguir reintentándose.
+export async function deletePendingCatalogEvents(storeId: string): Promise<void> {
+  await getPool().query(
+    `DELETE FROM webhook_events WHERE store_id=$1 AND processed=false AND (
+       event_type LIKE 'product/%' OR event_type LIKE 'category/%'
+       OR event_type LIKE 'location/%' OR event_type='internal/backfill')`,
+    [storeId],
+  );
+}

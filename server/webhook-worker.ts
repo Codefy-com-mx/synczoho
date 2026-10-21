@@ -1,10 +1,10 @@
 import { getPool } from "./db.js";
 import createSalesorder from "./functions/zoho-create-salesorder/index.js";
 import sendAlertEmail from "./functions/send-alert-email/index.js";
-import { TN_API, TN_USER_AGENT, getStore, type TiendanubeStore } from "./functions/_shared/tiendanube.js";
+import { TN_API, TN_USER_AGENT, findStore, type TiendanubeStore } from "./functions/_shared/tiendanube.js";
 import { applyPricesToZoho, diffPrices } from "./functions/_shared/price-from-tn.js";
 import {
-  backfillCatalog, deleteProduct, loadProductCatalog, refreshCategory, refreshProduct,
+  backfillCatalog, deleteProduct, deletePendingCatalogEvents, loadProductCatalog, refreshCategory, refreshProduct,
 } from "./functions/_shared/tn-catalog.js";
 import { refreshLocationMappings } from "./functions/_shared/locations.js";
 import { logRetryObserver } from "./functions/_shared/tn-observer.js";
@@ -66,12 +66,24 @@ async function refreshAndPushPrices(store: TiendanubeStore, productId: number): 
   if (changes.length > 0) await applyPricesToZoho(admin, conn, store.store_id, changes);
 }
 
+// Eventos de catálogo: sin tienda no pueden completarse y se pueden abandonar.
+// Pedidos, privacidad y app/* nunca entran aquí: deben reintentarse siempre.
+const isCatalogFamily = (event: string) => event.startsWith("product/") || event.startsWith("category/")
+  || event.startsWith("location/") || event === "internal/backfill";
+
 export async function processEvent(row: EventRow): Promise<void> {
   const pool = getPool();
   const { store_id: storeId, event_type: event, payload } = row;
-  if (event.startsWith("product/") || event.startsWith("category/") || event === "internal/backfill") {
-    const store = await getStore(getAdminClient(), storeId);
-    if (event === "internal/backfill") {
+  if (isCatalogFamily(event)) {
+    const admin = getAdminClient();
+    const store = await findStore(admin, storeId);
+    // Tienda desconectada/desinstalada: el evento queda procesado en vez de reintentarse para siempre.
+    if (!store) return;
+    if (event.startsWith("location/")) {
+      // created/updated/deleted: se recalcula la lista completa. Sin Zoho activo se refresca solo el lado de Tiendanube.
+      const conn = await getZohoConnection(admin, storeId).catch(() => null);
+      await refreshLocationMappings(admin, store, conn);
+    } else if (event === "internal/backfill") {
       await backfillCatalog(store, logRetryObserver(getAdminClient(), storeId));
     } else if (event === "product/deleted") {
       await deleteProduct(storeId, Number(payload.id));
@@ -84,13 +96,6 @@ export async function processEvent(row: EventRow): Promise<void> {
     } else {
       await refreshProduct(store, Number(payload.id));
     }
-    return;
-  }
-  if (event.startsWith("location/")) {
-    // created/updated/deleted: se recalcula la lista completa. Sin Zoho activo se refresca solo el lado de Tiendanube.
-    const admin = getAdminClient();
-    const conn = await getZohoConnection(admin, storeId).catch(() => null);
-    await refreshLocationMappings(admin, await getStore(admin, storeId), conn);
     return;
   }
   if (event.startsWith("order/")) {
@@ -114,6 +119,7 @@ export async function processEvent(row: EventRow): Promise<void> {
     for (const table of ["tn_variants", "tn_categories", "location_mappings"]) {
       await pool.query(`DELETE FROM ${table} WHERE store_id=$1`, [storeId]);
     }
+    await deletePendingCatalogEvents(storeId);
     await pool.query("DELETE FROM stores WHERE store_id=$1", [storeId]);
     return;
   }
@@ -242,6 +248,18 @@ export async function onEventFailure(row: EventRow, message: string): Promise<vo
   if (!alert.ok) console.error("Catalog alert email failed", row.store_id, alert.status);
 }
 
+const MAX_CATALOG_FAMILY_ATTEMPTS = 10;
+
+// Un evento de catálogo que falla 10 veces se abandona (processed=true conservando el motivo) para que no
+// se reintente cada hora ni degrade /status para siempre. Pedidos y privacidad nunca se abandonan.
+export async function abandonIfExhausted(row: EventRow, message: string): Promise<void> {
+  if (!isCatalogFamily(row.event_type) || row.attempts < MAX_CATALOG_FAMILY_ATTEMPTS) return;
+  await getPool().query(
+    "UPDATE webhook_events SET processed=true, payload=NULL, error_message=$2 WHERE id=$1",
+    [row.id, `abandonado tras ${MAX_CATALOG_FAMILY_ATTEMPTS} intentos: ${message}`.slice(0, 500)],
+  );
+}
+
 let running = false;
 let lastCleanup = 0;
 export async function runWebhookWorker(): Promise<void> {
@@ -289,6 +307,7 @@ export async function runWebhookWorker(): Promise<void> {
           [row.id, message.slice(0, 500)],
         );
         await onEventFailure(row, message).catch((e) => console.error("Catalog failure handling failed", row.id, e));
+        await abandonIfExhausted(row, message).catch((e) => console.error("Abandon handling failed", row.id, e));
       } finally {
         await lockClient.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(() => undefined);
         lockClient.release();

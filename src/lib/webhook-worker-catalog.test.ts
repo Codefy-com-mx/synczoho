@@ -13,6 +13,10 @@ const m = vi.hoisted(() => ({
   sendAlert: vi.fn(),
   observer: { onRetry: vi.fn() },
   refreshLocationMappings: vi.fn(),
+  findStore: vi.fn(),
+  getStore: vi.fn(),
+  deletePendingCatalogEvents: vi.fn(),
+  createSalesorder: vi.fn(),
 }));
 const store = { store_id: "1", access_token: "t", store_name: "s" };
 const conn = { store_id: "1", organization_id: "o" };
@@ -20,13 +24,14 @@ vi.mock("../../server/db", () => ({ getPool: () => ({ query: m.query }) }));
 vi.mock("../../server/functions/_shared/tn-catalog", () => ({
   refreshProduct: m.refreshProduct, loadProductCatalog: m.loadProductCatalog, deleteProduct: m.deleteProduct,
   refreshCategory: m.refreshCategory, backfillCatalog: m.backfillCatalog,
+  deletePendingCatalogEvents: m.deletePendingCatalogEvents,
 }));
 vi.mock("../../server/functions/_shared/price-from-tn", async (orig) => ({
   ...(await orig<typeof import("../../server/functions/_shared/price-from-tn")>()),
   applyPricesToZoho: m.applyPricesToZoho,
 }));
 vi.mock("../../server/functions/_shared/tiendanube", () => ({
-  getStore: vi.fn(async () => store), TN_API: "", TN_USER_AGENT: "",
+  getStore: m.getStore, findStore: m.findStore, TN_API: "", TN_USER_AGENT: "",
 }));
 vi.mock("../../server/functions/_shared/zoho", () => ({
   getAdminClient: () => ({}), logSync: m.logSync, getZohoConnection: m.getZohoConnection,
@@ -34,8 +39,8 @@ vi.mock("../../server/functions/_shared/zoho", () => ({
 vi.mock("../../server/functions/_shared/locations", () => ({ refreshLocationMappings: m.refreshLocationMappings }));
 vi.mock("../../server/functions/_shared/tn-observer", () => ({ logRetryObserver: () => m.observer }));
 vi.mock("../../server/functions/send-alert-email/index", () => ({ default: m.sendAlert }));
-vi.mock("../../server/functions/zoho-create-salesorder/index", () => ({ default: vi.fn() }));
-import { onEventFailure, processEvent } from "../../server/webhook-worker";
+vi.mock("../../server/functions/zoho-create-salesorder/index", () => ({ default: m.createSalesorder }));
+import { abandonIfExhausted, onEventFailure, processEvent } from "../../server/webhook-worker";
 
 const row = (event_type: string, payload: Record<string, unknown> = {}, attempts = 1) =>
   ({ id: "e1", store_id: "1", event_type, payload, attempts });
@@ -49,6 +54,8 @@ beforeEach(() => {
   m.getZohoConnection.mockResolvedValue(conn);
   m.backfillCatalog.mockResolvedValue({ products: 0, variants: 0 });
   m.sendAlert.mockResolvedValue(new Response("{}"));
+  m.getStore.mockResolvedValue(store);
+  m.findStore.mockResolvedValue(store);
 });
 
 describe("processEvent catálogo", () => {
@@ -199,5 +206,55 @@ describe("processEvent locations", () => {
     await processEvent(row("location/deleted", { id: "A" }));
     expect(m.refreshLocationMappings).toHaveBeenCalledTimes(2);
     expect(m.refreshLocationMappings).toHaveBeenNthCalledWith(2, {}, store, conn);
+  });
+});
+
+describe("tienda inexistente", () => {
+  it.each(["product/updated", "product/deleted", "category/updated", "location/updated", "internal/backfill"])(
+    "%s sin fila en stores termina sin error ni efectos", async (type) => {
+      m.findStore.mockResolvedValue(null);
+      m.getStore.mockRejectedValue(new Error("Tienda no encontrada"));
+      await expect(processEvent(row(type, { id: 1 }))).resolves.toBeUndefined();
+      expect(m.refreshProduct).not.toHaveBeenCalled();
+      expect(m.deleteProduct).not.toHaveBeenCalled();
+      expect(m.refreshCategory).not.toHaveBeenCalled();
+      expect(m.refreshLocationMappings).not.toHaveBeenCalled();
+      expect(m.backfillCatalog).not.toHaveBeenCalled();
+    });
+
+  it("order/paid sin tienda sigue lanzando", async () => {
+    m.findStore.mockResolvedValue(null);
+    m.createSalesorder.mockResolvedValue(new Response(JSON.stringify({ error: "Tienda no encontrada" }), { status: 500 }));
+    await expect(processEvent(row("order/paid", { id: 9 }))).rejects.toThrow("Order sync returned 500");
+  });
+});
+
+describe("abandonIfExhausted", () => {
+  it.each(["product/updated", "category/created", "location/updated", "internal/backfill"])(
+    "%s con 10 intentos se marca procesado con el motivo", async (type) => {
+      await abandonIfExhausted(row(type, {}, 10), "Tienda no encontrada");
+      expect(m.query).toHaveBeenCalledOnce();
+      expect(m.query).toHaveBeenCalledWith(
+        expect.stringMatching(/UPDATE webhook_events SET processed=true, payload=NULL, error_message=\$2 WHERE id=\$1/),
+        ["e1", "abandonado tras 10 intentos: Tienda no encontrada"]);
+    });
+
+  it("no abandona con menos de 10 intentos", async () => {
+    await abandonIfExhausted(row("product/updated", {}, 9), "boom");
+    expect(m.query).not.toHaveBeenCalled();
+  });
+
+  it.each(["order/paid", "customers/redact", "customers/data_request", "store/redact", "app/uninstalled"])(
+    "%s nunca se abandona (12 intentos)", async (type) => {
+      await abandonIfExhausted(row(type, {}, 12), "boom");
+      expect(m.query).not.toHaveBeenCalled();
+    });
+});
+
+describe("app/uninstalled", () => {
+  it("borra los eventos de catálogo pendientes de la tienda", async () => {
+    await processEvent(row("app/uninstalled"));
+    expect(m.deletePendingCatalogEvents).toHaveBeenCalledWith("1");
+    expect(m.query).not.toHaveBeenCalledWith(expect.stringContaining("DELETE FROM webhook_events"), expect.anything());
   });
 });

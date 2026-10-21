@@ -3,6 +3,7 @@ import { serve } from "../../runtime.js";
 // Elimina todos los datos asociados a la tienda de forma idempotente:
 // si la tienda ya no existe (ej: fue desinstalada desde TN admin), devuelve success igual.
 import { corsHeaders, getAdminClient } from "../_shared/zoho.js";
+import { deletePendingCatalogEvents } from "../_shared/tn-catalog.js";
 
 export default serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -28,6 +29,8 @@ export default serve(async (req) => {
       admin.from("tn_variants").delete().eq("store_id", store_id),
       admin.from("tn_categories").delete().eq("store_id", store_id),
       admin.from("location_mappings").delete().eq("store_id", store_id),
+      // La app sigue instalada en Tiendanube y los webhooks siguen llegando: sin tienda no pueden completarse.
+      deletePendingCatalogEvents(String(store_id)),
     ]);
 
     // Eliminar la tienda al final (foreign keys dependen de store_id)

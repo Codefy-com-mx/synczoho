@@ -17,6 +17,7 @@ vi.mock("../../server/db.js", () => ({
 
 import {
   backfillCatalog,
+  deletePendingCatalogEvents,
   enqueueBackfill,
   getCatalogStatus,
   loadCatalog,
@@ -150,6 +151,21 @@ describe("enqueueBackfill", () => {
     expect(await enqueueBackfill("s1")).toBe(false);
     expect(sqls()[0]).toContain("NOT EXISTS");
     expect(sqls()[0]).toContain("internal/backfill");
+  });
+});
+
+describe("deletePendingCatalogEvents", () => {
+  it("borra solo eventos pendientes de catálogo de esa tienda", async () => {
+    await deletePendingCatalogEvents("s1");
+    expect(h.queries).toHaveLength(1);
+    const { text, values } = h.queries[0];
+    expect(values).toEqual(["s1"]);
+    expect(text).toMatch(/DELETE FROM webhook_events WHERE store_id=\$1 AND processed=false AND \(/);
+    expect(text).toContain("event_type LIKE 'product/%'");
+    expect(text).toContain("event_type LIKE 'category/%'");
+    expect(text).toContain("event_type LIKE 'location/%'");
+    expect(text).toContain("event_type='internal/backfill'");
+    expect(text).not.toMatch(/order|customers|store\/redact|app\//);
   });
 });
 

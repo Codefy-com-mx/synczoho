@@ -10,18 +10,27 @@ export interface TiendanubeStore {
   store_name: string | null;
 }
 
-export async function getStore(
+// null si la fila de la tienda no existe (desconectada o desinstalada).
+export async function findStore(
   admin: DatabaseClient,
   storeId: string,
-): Promise<TiendanubeStore> {
+): Promise<TiendanubeStore | null> {
   const { data, error } = await admin
     .from("stores")
     .select("store_id, access_token, store_name")
     .eq("store_id", storeId)
     .maybeSingle();
   if (error) throw new Error(`DB error: ${error.message}`);
-  if (!data) throw new Error("Tienda no encontrada");
-  return data as TiendanubeStore;
+  return (data as TiendanubeStore | null) ?? null;
+}
+
+export async function getStore(
+  admin: DatabaseClient,
+  storeId: string,
+): Promise<TiendanubeStore> {
+  const store = await findStore(admin, storeId);
+  if (!store) throw new Error("Tienda no encontrada");
+  return store;
 }
 
 function sleep(ms: number): Promise<void> {
