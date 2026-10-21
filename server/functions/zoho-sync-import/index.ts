@@ -10,6 +10,12 @@ import { serve } from "../../runtime.js";
 import { corsHeaders, getAdminClient, getZohoConnection, getValidAccessToken, INVENTORY_DOMAINS, logSync, zohoFetch } from "../_shared/zoho.js";
 import { encodeBase64 } from "../../base64.js";
 import { tnFetchWithRetry } from "../_shared/tiendanube.js";
+import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings, type LocationMapping } from "../_shared/locations.js";
+import { deriveTnLocationCount, resolveInitialLevels } from "../_shared/stock-plan.js";
+import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
+
+type StockCtx = { mappings: LocationMapping[]; tnLocationCount: number | null };
+type TnImage = { attachment: string; filename: string; position?: number };
 
 interface ImportRequest {
   store_id: string;
@@ -41,6 +47,7 @@ interface ZohoVariantData {
   rate: number;           // precio de lista (price en TN)
   sales_rate: number | null; // precio de venta (promotional_price en TN si distinto de rate)
   stock_on_hand: number;
+  locations?: Array<{ location_id: string; stock: number }>; // stock por almacén de Zoho (si viene)
   weight: number | null;
   length: number | null;
   width: number | null;
@@ -101,6 +108,15 @@ export default serve(async (req) => {
     );
     let tnCategories: Map<string, number> | null = null;
 
+    // Mapeos de locations y cantidad de locations de TN: una vez por request (no por ítem).
+    const needsStock = F.stock && items.some((i) => i.action !== "link");
+    const mappings = needsStock ? await loadLocationMappings(storeId) : [];
+    const stockCtx: StockCtx = {
+      mappings,
+      tnLocationCount: needsStock ? deriveTnLocationCount(await fetchTnLocations(store), mappings, []) : null,
+    };
+    const needZohoLocations = needsStock && mappings.some((m) => m.zoho_location_id && m.zoho_location_id !== ZOHO_TOTAL);
+
     const results: Array<{
       zoho_item_id: string;
       status: "success" | "error" | "skipped";
@@ -114,11 +130,16 @@ export default serve(async (req) => {
       const start = Date.now();
       try {
         // Resolver el producto (suelto o grupo)
-        const product = await loadZohoProduct(admin, conn, entry.zoho_item_id);
+        const product = await loadZohoProduct(admin, conn, entry.zoho_item_id, needZohoLocations && entry.action !== "link");
         let tnProductId: number | null = entry.tiendanube_product_id || null;
+        const warnings: string[] = [];
 
         if (entry.action === "create") {
-          const payload = buildCreatePayload(product, F, publish);
+          const payload = buildCreatePayload(product, F, publish, stockCtx);
+          if (F.stock) {
+            const w = product.variants.map((v) => levelsFor(v, stockCtx).warning).find(Boolean);
+            if (w) warnings.push(`${w}: el stock no se envió`);
+          }
           if (F.category && product.category_name) {
             let categoryId = catMap.get(product.category_name);
             if (!categoryId) {
@@ -158,10 +179,8 @@ export default serve(async (req) => {
             }
             payload.categories = [categoryId];
           }
-          if (F.images) {
-            const imgs = await fetchProductImages(admin, conn, product);
-            if (imgs.length > 0) payload.images = imgs;
-          }
+          // Las imágenes se descargan antes de crear, pero se suben después (POST /products no lleva images).
+          const imgs = F.images ? await fetchProductImages(admin, conn, product) : [];
           const resp = await tnFetchWithRetry(store, "/products", {
             method: "POST",
             body: JSON.stringify(payload),
@@ -169,6 +188,8 @@ export default serve(async (req) => {
           const created = await resp.json();
           if (!resp.ok) throw new Error(tnErr(created, resp.status));
           tnProductId = created.id;
+          const failedImages = await uploadImages(admin, storeId, store, tnProductId!, product.sync_key, imgs);
+          if (failedImages > 0) warnings.push(`${failedImages} imagen(es) no se pudieron subir`);
         } else if (entry.action === "update") {
           if (!tnProductId) throw new Error("tiendanube_product_id requerido para update");
           if (overwrite) {
@@ -185,16 +206,12 @@ export default serve(async (req) => {
               if (!resp.ok) throw new Error(tnErr(updated, resp.status));
             }
             // Sincronizar variantes: actualizar las que matchean por SKU
-            await syncVariantsUpdate(store, tnProductId, product, F);
+            warnings.push(...await syncVariantsUpdate(store, tnProductId, product, F, stockCtx));
 
             if (F.images) {
               const imgs = await fetchProductImages(admin, conn, product);
-              for (const img of imgs) {
-                await tnFetchWithRetry(store, `/products/${tnProductId}/images`, {
-                  method: "POST",
-                  body: JSON.stringify(img),
-                }).catch(() => {});
-              }
+              const failedImages = await uploadImages(admin, storeId, store, tnProductId, product.sync_key, imgs);
+              if (failedImages > 0) warnings.push(`${failedImages} imagen(es) no se pudieron subir`);
             }
           }
         } else if (entry.action === "link") {
@@ -252,12 +269,14 @@ export default serve(async (req) => {
           tiendanube_product_id: tnProductId,
           status: "success",
           duration_ms: Date.now() - start,
-          message: product.is_group ? `Grupo con ${product.variants.length} variantes` : undefined,
+          message: [product.is_group ? `Grupo con ${product.variants.length} variantes` : null, ...warnings]
+            .filter(Boolean).join("; ") || undefined,
         });
 
         results.push({
           zoho_item_id: entry.zoho_item_id,
           status: "success",
+          message: warnings.length > 0 ? warnings.join("; ") : undefined,
           tiendanube_product_id: tnProductId,
           action: entry.action,
           variants_count: product.variants.length,
@@ -306,6 +325,7 @@ async function loadZohoProduct(
   admin: any,
   conn: any,
   zohoItemId: string,
+  needLocations = false,
 ): Promise<ZohoProductData> {
   if (zohoItemId.startsWith("group:")) {
     const gid = zohoItemId.slice("group:".length);
@@ -324,6 +344,16 @@ async function loadZohoProduct(
       if (n) attrNames.push(String(n));
     }
 
+    // El detalle del grupo suele no traer stock por almacén: solo si hay vínculos reales se pide por hijo.
+    if (needLocations) {
+      for (const it of itemsRaw) {
+        if (Array.isArray(it.locations)) continue;
+        const ri = await zohoFetch(admin, conn, `/inventory/v1/items/${it.item_id}`);
+        const ji = await ri.json().catch(() => null);
+        if (ri.ok && Array.isArray(ji?.item?.locations)) it.locations = ji.item.locations;
+      }
+    }
+
     const variants: ZohoVariantData[] = itemsRaw.map((it: any) => {
       const rate = Number(it.rate ?? 0);
       const salesRate = it.sales_rate != null ? Number(it.sales_rate) : null;
@@ -336,6 +366,7 @@ async function loadZohoProduct(
         // se mapea como promotional_price en TN
         sales_rate: salesRate !== null && salesRate !== rate ? salesRate : null,
         stock_on_hand: Number(it.stock_on_hand ?? it.actual_available_stock ?? 0),
+        locations: zohoLocations(it),
         weight: it.weight != null ? Number(it.weight) : null,
         length: it.length != null ? Number(it.length) : null,
         width: it.width != null ? Number(it.width) : null,
@@ -385,6 +416,7 @@ async function loadZohoProduct(
       rate,
       sales_rate: salesRate !== null && salesRate !== rate ? salesRate : null,
       stock_on_hand: Number(it.stock_on_hand ?? 0),
+      locations: zohoLocations(it),
       weight: it.weight != null ? Number(it.weight) : null,
       length: it.length != null ? Number(it.length) : null,
       width: it.width != null ? Number(it.width) : null,
@@ -394,6 +426,15 @@ async function loadZohoProduct(
     }],
     attribute_names: [],
   };
+}
+
+function zohoLocations(it: any): ZohoVariantData["locations"] {
+  if (!Array.isArray(it.locations)) return undefined;
+  return it.locations.map((l: any) => ({ location_id: String(l.location_id), stock: Number(l.location_stock_on_hand) || 0 }));
+}
+
+function levelsFor(v: ZohoVariantData, ctx: StockCtx) {
+  return resolveInitialLevels({ total: v.stock_on_hand, zohoLocations: v.locations, ...ctx });
 }
 
 function extractVariantAttrs(it: any, ig: any, names: string[]): Record<string, string> {
@@ -413,6 +454,7 @@ function buildCreatePayload(
   p: ZohoProductData,
   F: typeof DEFAULT_FIELDS,
   publish: boolean,
+  stockCtx: StockCtx,
 ): Record<string, any> {
   const payload: Record<string, any> = { published: publish };
 
@@ -435,8 +477,9 @@ function buildCreatePayload(
       }
     }
     if (F.stock) {
-      tnVar.stock_management = true;
-      tnVar.stock = Number(v.stock_on_hand ?? 0);
+      // Nunca `stock`/`stock_management`: el stock va por inventory_levels (explícito por location).
+      const { levels } = levelsFor(v, stockCtx);
+      if (levels.length > 0) tnVar.inventory_levels = levels;
     }
     if (F.sku && v.sku) tnVar.sku = v.sku;
     if (F.weight && v.weight != null) tnVar.weight = String(v.weight);
@@ -457,17 +500,20 @@ function buildCreatePayload(
   return payload;
 }
 
-// Para update: matchea variantes TN existentes por SKU y actualiza precio/stock.
+// Para update: matchea variantes TN existentes por SKU y manda precio/stock por
+// PATCH /products/stock-price (nunca PUT de variante con stock). Devuelve avisos.
 async function syncVariantsUpdate(
   store: { store_id: string; access_token: string; store_name: string | null },
   tnProductId: number,
   p: ZohoProductData,
   F: typeof DEFAULT_FIELDS,
-) {
-  if (!F.price && !F.stock) return;
+  stockCtx: StockCtx,
+): Promise<string[]> {
+  if (!F.price && !F.stock) return [];
+  const warnings: string[] = [];
   // Traer variantes actuales
   const r = await tnFetchWithRetry(store, `/products/${tnProductId}/variants`);
-  if (!r.ok) return;
+  if (!r.ok) return warnings;
   const tnVariants: any[] = await r.json();
   const norm = (s: any) => (s ?? "").toString().trim().toUpperCase();
   const bySku = new Map<string, any>();
@@ -475,25 +521,63 @@ async function syncVariantsUpdate(
     if (tv.sku) bySku.set(norm(tv.sku), tv);
   }
 
+  const variants: Array<Record<string, unknown>> = [];
   for (const v of p.variants) {
     if (!v.sku) continue;
     const tv = bySku.get(norm(v.sku));
     if (!tv) continue;
-    const body: Record<string, unknown> = {};
+    const body: Record<string, unknown> = { id: tv.id };
     if (F.price) {
       body.price = String(v.rate ?? 0);
       if (v.sales_rate != null) body.promotional_price = String(v.sales_rate);
     }
     if (F.stock) {
-      body.stock_management = true;
-      body.stock = Number(v.stock_on_hand ?? 0);
+      const { levels, warning } = levelsFor(v, stockCtx);
+      if (levels.length > 0) body.inventory_levels = levels;
+      if (warning) warnings.push(`${warning}: el stock no se envió`);
     }
-    if (Object.keys(body).length === 0) continue;
-    await tnFetchWithRetry(store, `/products/${tnProductId}/variants/${tv.id}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }).catch(() => {});
+    if (Object.keys(body).length > 1) variants.push(body);
   }
+  for (const chunk of chunkStockPriceBatch([{ id: tnProductId, variants }])) {
+    const resp = await tnFetchWithRetry(store, "/products/stock-price", {
+      method: "PATCH",
+      body: JSON.stringify(chunk),
+    });
+    if (!resp.ok) throw new Error(tnErr(await resp.json().catch(() => null), resp.status));
+  }
+  return [...new Set(warnings)];
+}
+
+// Sube cada imagen por POST /products/{id}/images. Un fallo se registra en sync_logs
+// y no rompe el alta; devuelve cuántas fallaron.
+async function uploadImages(
+  admin: any,
+  storeId: string,
+  store: { store_id: string; access_token: string; store_name: string | null },
+  tnProductId: number,
+  zohoItemId: string,
+  imgs: TnImage[],
+): Promise<number> {
+  let failed = 0;
+  for (const img of imgs) {
+    let message: string | null = null;
+    try {
+      const resp = await tnFetchWithRetry(store, `/products/${tnProductId}/images`, {
+        method: "POST",
+        body: JSON.stringify(img),
+      });
+      if (!resp.ok) message = `Imagen ${img.filename}: HTTP ${resp.status}`;
+    } catch (e) {
+      message = `Imagen ${img.filename}: ${e instanceof Error ? e.message : "error de red"}`;
+    }
+    if (message) {
+      failed++;
+      await logSync(admin, storeId, {
+        operation: "import_image", zoho_item_id: zohoItemId, tiendanube_product_id: tnProductId, status: "error", message,
+      });
+    }
+  }
+  return failed;
 }
 
 // ============================================================

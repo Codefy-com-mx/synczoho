@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStockPatch, deriveTnLocationCount, planStockChanges, type ZohoStockItem } from "../../server/functions/_shared/stock-plan";
+import { buildStockPatch, deriveTnLocationCount, planStockChanges, resolveInitialLevels, type ZohoStockItem } from "../../server/functions/_shared/stock-plan";
 import type { CatalogVariant } from "../../server/functions/_shared/tn-catalog";
 import { ZOHO_TOTAL, type LocationMapping } from "../../server/functions/_shared/locations";
 
@@ -223,5 +223,44 @@ describe("deriveTnLocationCount", () => {
   });
   it("(4) fetch failed and nothing known: null (legacy path)", () => {
     expect(deriveTnLocationCount(null, [], [variant("A", [])])).toBeNull();
+  });
+});
+
+describe("resolveInitialLevels", () => {
+  const zl = [{ location_id: "Z1", stock: 7.9 }, { location_id: "Z2", stock: 3 }];
+  it("linked real mappings: one explicit level per linked TN location, missing -> 0, unlinked skipped", () => {
+    const r = resolveInitialLevels({
+      total: 99, zohoLocations: zl, tnLocationCount: 3,
+      mappings: [mapping("L1", "Z1"), mapping("L2", "Z9"), mapping("L3", null)],
+    });
+    expect(r).toEqual({ levels: [{ location_id: "L1", stock: 7 }, { location_id: "L2", stock: 0 }] });
+  });
+  it("linked real mapping without zoho locations data: 0", () => {
+    expect(resolveInitialLevels({ total: 5, mappings: [mapping("L1", "Z1")], tnLocationCount: 1 }).levels)
+      .toEqual([{ location_id: "L1", stock: 0 }]);
+  });
+  it("ZOHO_TOTAL mapping: one level with the total on that TN location", () => {
+    expect(resolveInitialLevels({
+      total: 12.7, mappings: [mapping("L1", ZOHO_TOTAL), mapping("L2", null)], tnLocationCount: 2,
+    })).toEqual({ levels: [{ location_id: "L1", stock: 12 }] });
+  });
+  it("total + real link: no levels, mixed warning", () => {
+    expect(resolveInitialLevels({
+      total: 5, zohoLocations: zl, mappings: [mapping("L1", ZOHO_TOTAL), mapping("L2", "Z1")], tnLocationCount: 2,
+    })).toEqual({ levels: [], warning: "locations mezcladas" });
+  });
+  it.each([null, 0, 1])("no links and tnLocationCount %s: legacy level without location_id", (n) => {
+    expect(resolveInitialLevels({ total: 4, mappings: [mapping("L1", null)], tnLocationCount: n }))
+      .toEqual({ levels: [{ stock: 4 }] });
+  });
+  it("no links and 2+ TN locations: nothing sent, unmapped warning", () => {
+    expect(resolveInitialLevels({ total: 4, mappings: [], tnLocationCount: 2 }))
+      .toEqual({ levels: [], warning: "locations sin mapear" });
+  });
+  it("floors and never goes negative", () => {
+    expect(resolveInitialLevels({ total: -3, mappings: [], tnLocationCount: 1 }).levels).toEqual([{ stock: 0 }]);
+    expect(resolveInitialLevels({
+      total: 1, zohoLocations: [{ location_id: "Z1", stock: -2.5 }], mappings: [mapping("L1", "Z1")], tnLocationCount: 1,
+    }).levels).toEqual([{ location_id: "L1", stock: 0 }]);
   });
 });

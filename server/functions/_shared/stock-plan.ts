@@ -136,3 +136,34 @@ export function buildStockPatch(
   }
   return [...products].map(([id, variants]) => ({ id, variants: [...variants.values()] }));
 }
+
+/**
+ * Stock inicial de una variante (alta o actualización desde Zoho) como `inventory_levels`.
+ * Mismas reglas que planStockChanges: sin vínculos y 2+ locations no se envía nada; total y
+ * vínculos reales a la vez tampoco. Si `levels` viene vacío, `warning` dice por qué.
+ */
+export function resolveInitialLevels(input: {
+  total: number;
+  zohoLocations?: Array<{ location_id: string; stock: number }>;
+  mappings: LocationMapping[];
+  tnLocationCount: number | null;
+}): { levels: Array<{ location_id?: string; stock: number }>; warning?: string } {
+  const qty = (n: unknown) => Math.max(0, Math.floor(Number(n) || 0));
+  const linked = input.mappings.filter((m) => m.zoho_location_id);
+  const hasTotal = linked.some((m) => m.zoho_location_id === ZOHO_TOTAL);
+  if (hasTotal && linked.some((m) => m.zoho_location_id !== ZOHO_TOTAL)) {
+    return { levels: [], warning: "locations mezcladas" };
+  }
+  if (linked.length === 0) {
+    if ((input.tnLocationCount ?? 0) >= 2) return { levels: [], warning: "locations sin mapear" };
+    return { levels: [{ stock: qty(input.total) }] };
+  }
+  return {
+    levels: linked.map((m) => ({
+      location_id: m.tn_location_id,
+      stock: hasTotal
+        ? qty(input.total)
+        : qty(input.zohoLocations?.find((l) => String(l.location_id) === m.zoho_location_id)?.stock),
+    })),
+  };
+}
