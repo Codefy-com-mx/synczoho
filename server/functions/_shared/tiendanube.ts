@@ -99,18 +99,28 @@ export async function tnFetchWithRetry(
       if (remaining > 0 && remaining < 5) await sleep(600);
     }
 
-    const waitMs = retryDelayMs(status, attempt, resp?.headers.get("Retry-After") ?? null);
+    // Solo 429 (petición no procesada) es seguro de reintentar en métodos no idempotentes.
+    const idempotent = ["GET", "HEAD", "PUT", "PATCH", "DELETE"].includes((init.method ?? "GET").toUpperCase());
+    const waitMs = idempotent || status === 429
+      ? retryDelayMs(status, attempt, resp?.headers.get("Retry-After") ?? null)
+      : null;
     if (waitMs === null) {
       if (resp) return resp;
       throw netErr;
     }
     if (attempt >= maxRetries) {
-      await observer?.onExhausted?.({ status, path });
+      try {
+        await observer?.onExhausted?.({ status, path });
+      } catch {
+        console.error(`[TN] observer.onExhausted falló para ${path}`);
+      }
       if (resp) return resp;
       throw netErr;
     }
 
     console.warn(`[TN] ${status || "red"} en ${path}. Reintento ${attempt + 1}/${maxRetries} en ${waitMs}ms`);
+    // Libera el socket de la respuesta descartada
+    await resp?.body?.cancel().catch(() => {});
     await sleep(waitMs);
   }
 }

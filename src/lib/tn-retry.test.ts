@@ -97,4 +97,63 @@ describe("tnFetchWithRetry", () => {
     expect(f).toHaveBeenCalledTimes(1);
     expect(onExhausted).not.toHaveBeenCalled();
   });
+
+  it("POST 503 → 1 llamada y devuelve el 503", async () => {
+    const f = vi.fn().mockImplementation(async () => new Response("", { status: 503 }));
+    vi.stubGlobal("fetch", f);
+    const resp = await run(tnFetchWithRetry(store, "/products", { method: "POST", body: "{}" }));
+    expect(resp.status).toBe(503);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST 429 y luego 200 → 2 llamadas", async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 429 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    const resp = await run(tnFetchWithRetry(store, "/products", { method: "POST", body: "{}" }));
+    expect(resp.status).toBe(200);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("POST con error de red → lanza tras 1 llamada", async () => {
+    const f = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", f);
+    await expect(run(tnFetchWithRetry(store, "/products", { method: "POST", body: "{}" }))).rejects.toThrow("fetch failed");
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("PUT 503, 503, 200 → 3 llamadas", async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    const resp = await run(tnFetchWithRetry(store, "/x", { method: "PUT", body: "{}" }));
+    expect(resp.status).toBe(200);
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it("un observer que lanza no reemplaza la respuesta ni el error de red", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onExhausted = vi.fn().mockRejectedValue(new Error("db caída"));
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("", { status: 503 })));
+    expect((await run(tnFetchWithRetry(store, "/x", {}, 1, { onExhausted }))).status).toBe(503);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(run(tnFetchWithRetry(store, "/x", {}, 1, { onExhausted }))).rejects.toThrow("fetch failed");
+    expect(onExhausted).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancela el body de las respuestas reintentadas", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const retried = new Response("", { status: 503 });
+    Object.defineProperty(retried, "body", { value: { cancel } });
+    const f = vi.fn()
+      .mockResolvedValueOnce(retried)
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    const resp = await run(tnFetchWithRetry(store, "/x"));
+    expect(resp.status).toBe(200);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 });
