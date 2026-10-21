@@ -44,6 +44,20 @@ export function matchBySku(zohoItems: ZohoStockItem[], catalog: CatalogVariant[]
   return { pairs, unmatched };
 }
 
+/**
+ * Cantidad de locations de Tiendanube. Si la consulta en vivo falló (null), usa lo ya conocido
+ * (mapeos guardados e inventory_levels de la caché) para no caer al camino legado a ciegas.
+ * `null` solo si ninguna fuente conoce una location.
+ */
+export function deriveTnLocationCount(
+  fetched: unknown[] | null, mappings: LocationMapping[], catalog: CatalogVariant[],
+): number | null {
+  if (fetched) return fetched.length;
+  const fromMappings = new Set(mappings.map((m) => m.tn_location_id)).size;
+  const fromCatalog = new Set(catalog.flatMap((v) => v.inventory_levels.map((l) => l.location_id))).size;
+  return Math.max(fromMappings, fromCatalog) || null;
+}
+
 export function planStockChanges(input: {
   zohoItems: ZohoStockItem[];
   catalog: CatalogVariant[];

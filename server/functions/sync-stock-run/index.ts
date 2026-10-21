@@ -22,7 +22,7 @@ import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 import { getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 import { fetchTnLocations, loadLocationMappings } from "../_shared/locations.js";
-import { buildStockPatch, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
+import { buildStockPatch, deriveTnLocationCount, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
 import { logRetryObserver } from "../_shared/tn-observer.js";
 
 const ZOHO_DETAIL_CONCURRENCY = 3;
@@ -94,7 +94,7 @@ export default serve(async (req) => {
     // 2) Variantes de Tiendanube desde la caché local, mapeos y cantidad de locations
     const catalog = await loadCatalog(storeId);
     const mappings = await loadLocationMappings(storeId);
-    const tnLocationCount = (await fetchTnLocations(store))?.length ?? null;
+    const tnLocationCount = deriveTnLocationCount(await fetchTnLocations(store), mappings, catalog);
 
     // 3) Si la lista de Zoho no trae stock por location, pedir el detalle solo de los ítems con match
     let errors = 0;

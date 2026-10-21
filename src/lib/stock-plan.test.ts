@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStockPatch, planStockChanges, type ZohoStockItem } from "../../server/functions/_shared/stock-plan";
+import { buildStockPatch, deriveTnLocationCount, planStockChanges, type ZohoStockItem } from "../../server/functions/_shared/stock-plan";
 import type { CatalogVariant } from "../../server/functions/_shared/tn-catalog";
 import type { LocationMapping } from "../../server/functions/_shared/locations";
 
@@ -145,5 +145,30 @@ describe("planStockChanges", () => {
       tnLocationCount: 1,
     });
     expect(plan.changes).toEqual([]);
+  });
+});
+
+describe("deriveTnLocationCount", () => {
+  const unlinked = [mapping("L1", null), mapping("L2", null)];
+  it("uses the live list when the fetch succeeded", () => {
+    expect(deriveTnLocationCount([{}], unlinked, [])).toBe(1);
+  });
+  it("(1) fetch failed: stored mappings reveal 2 locations, so the plan blocks", () => {
+    const count = deriveTnLocationCount(null, unlinked, [variant("SKU-1", [["L1", 3]])]);
+    expect(count).toBe(2);
+    const plan = planStockChanges({
+      ...base, zohoItems: [{ item_id: "z1", sku: "SKU-1", stock_on_hand: 8 }],
+      catalog: [variant("SKU-1", [["L1", 3]])], mappings: unlinked, tnLocationCount: count,
+    });
+    expect(plan).toMatchObject({ blocked: "locations_unmapped", changes: [] });
+  });
+  it("(2) fetch failed: catalog levels reveal 2 distinct locations without mappings", () => {
+    expect(deriveTnLocationCount(null, [], [variant("A", [["L1", 3]]), variant("B", [["L1", 1], ["L2", 4]], 11, 110)])).toBe(2);
+  });
+  it("(3) fetch failed: a single known location keeps the legacy path", () => {
+    expect(deriveTnLocationCount(null, [], [variant("A", [["L1", 3]]), variant("B", [["L1", 1]], 11, 110)])).toBe(1);
+  });
+  it("(4) fetch failed and nothing known: null (legacy path)", () => {
+    expect(deriveTnLocationCount(null, [], [variant("A", [])])).toBeNull();
   });
 });

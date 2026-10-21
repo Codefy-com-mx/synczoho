@@ -395,4 +395,42 @@ describe("sync-stock-run per location", () => {
     expect(h.events).toEqual([]);
     expect(h.fetchCalls).toHaveLength(0);
   });
+
+  describe("when the live /locations fetch fails", () => {
+    beforeEach(() => {
+      h.tnLocations = null;
+      h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 8 }];
+    });
+
+    it("(1) blocks with 2 stored unlinked mappings instead of guessing", async () => {
+      h.mappings = [
+        { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
+        { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: null, zoho_location_name: null },
+      ];
+      const { payload } = await runHandler();
+      expect(payload).toMatchObject({ blocked: "locations_unmapped", updated: 0, errors: 0 });
+      expect(h.stockPriceBodies).toHaveLength(0);
+    });
+
+    it("(2) blocks when the catalog shows 2 locations and there are no mappings", async () => {
+      h.mappings = [];
+      h.catalog[0].inventory_levels = [{ location_id: "L1", stock: 3 }, { location_id: "L2", stock: 4 }];
+      const { payload } = await runHandler();
+      expect(payload).toMatchObject({ blocked: "locations_unmapped" });
+      expect(h.stockPriceBodies).toHaveLength(0);
+    });
+
+    it("(3) keeps the legacy path when the catalog shows a single location", async () => {
+      h.mappings = [];
+      await runHandler();
+      expect(h.stockPriceBodies[0][0].variants[0].inventory_levels).toEqual([{ stock: 8 }]);
+    });
+
+    it("(4) keeps the legacy path when no location is known at all", async () => {
+      h.mappings = [];
+      h.catalog[0].inventory_levels = [];
+      await runHandler();
+      expect(h.stockPriceBodies[0][0].variants[0].inventory_levels).toEqual([{ stock: 8 }]);
+    });
+  });
 });
