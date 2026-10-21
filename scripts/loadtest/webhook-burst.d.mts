@@ -1,6 +1,7 @@
 export function signBody(body: string, secret: string): string;
 export function percentile(sorted: number[], p: number): number;
 export function parseArgs(argv: string[]): Record<string, string | true>;
+export function validateOptions(args: Record<string, string | true>): string | null;
 export function parseOrderIds(raw: string | undefined | null): number[];
 export function validateRates(rps: number, duration: number): string | null;
 export function buildEvent(

@@ -112,7 +112,8 @@ RESULTADO: OK        (exit 0)
 Comprobaciones adicionales del script contra el mismo receptor falso:
 
 - Con `--order-ids 101,102` y `--status-url` a una ruta inexistente: `mezcla: 80 % product/updated, 20 % order/paid (2 ids reales)`, `drenado de cola: no medido (/api/status no disponible)` y `RESULTADO: OK (drenado no evaluado)`.
-- Con `--rps abc` o `--order-ids 1,x`: mensaje de error y salida 2.
+- Con `--rps abc`, `--order-ids 1,x` o una opción sin valor (`--rps` solo): mensaje de error ("falta el valor de --rps") y salida 2. Solo `--no-drain` puede ir sin valor.
+- `src/lib/loadtest-sign.test.ts` ejecuta el CLI real contra un servidor local y comprueba de extremo a extremo que `--no-drain` no consulta `/api/status` y termina con `RESULTADO: OK (drenado no evaluado)`.
 - Con un secreto incorrecto (corrida anterior de la primera versión del script): 9 respuestas 401, `RESULTADO: FALLA` y salida 1.
 - El stub respondió 200 a `GET products/7`, `GET locations` y `PATCH stock-price` (~50 ms) y 404 a otra ruta.
 - `src/lib/loadtest-sign.test.ts` verifica `signBody` contra `verifyWebhookSignature`, el mix con y sin `--order-ids`, la validación de argumentos y la línea de veredicto.

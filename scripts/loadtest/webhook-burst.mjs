@@ -2,7 +2,12 @@
 // Prueba de carga del receptor de webhooks de Tiendanube (perfil Hot Sale).
 //
 //   TIENDANUBE_CLIENT_SECRET=... node scripts/loadtest/webhook-burst.mjs \
-//     --url https://staging/api/functions/v1/tiendanube-webhook --rps 50 --duration 600 --store-id 123456
+//     --url https://staging/api/functions/v1/tiendanube-webhook --rps 50 --duration 600 --store-id 123456 --no-drain
+//
+// Opciones: --url (obligatoria), --rps (50), --duration (600 s), --store-id (1), --order-ids 101,102,
+// --status-url, --no-drain (única opción sin valor). Perfil de aceptación: con --no-drain. Perfil de
+// drenado (p. ej. --rps 5 --duration 60): sin --no-drain; sin la bandera, 50 rps x 600 s termina en
+// FALLA por diseño porque el worker no puede drenar ~28 500 eventos en 300 s.
 //
 // Sin dependencias: solo Node >= 18 (fetch global). Envía product/updated; solo si se pasan ids de
 // pedidos reales (--order-ids 101,102) mezcla 80 % product/updated y 20 % order/paid. Rampa lineal
@@ -44,6 +49,14 @@ export function parseArgs(argv) {
   return out;
 }
 
+/** Mensaje de error si una opción (salvo --no-drain) quedó sin valor, o null. */
+export function validateOptions(args) {
+  for (const [key, value] of Object.entries(args)) {
+    if (value === true && key !== "no-drain") return `falta el valor de --${key}`;
+  }
+  return null;
+}
+
 /** Enteros separados por coma -> number[]; vacío si no se pasó la opción. Lanza si algo no es entero positivo. */
 export function parseOrderIds(raw) {
   if (raw == null || raw === "") return [];
@@ -63,8 +76,9 @@ export function validateRates(rps, duration) {
 
 /**
  * Un evento del perfil. `r` en [0,1) decide el tipo. order/paid solo si hay ids reales: con ids
- * inventados el worker recibe 404 de Tiendanube, reintenta con backoff de hasta 1 h y la cola
- * nunca llega a 0.
+ * inventados el evento falla, se reintenta con backoff de hasta 3600 s, sigue generando errores y
+ * ruido en los logs y cuenta en `failed` al llegar a 5 intentos. `queue.pending` de /api/status
+ * solo cuenta eventos listos, así que esos eventos en backoff no aparecen como pendientes.
  */
 export function buildEvent(storeId, orderIds, r = Math.random(), pick = Math.random) {
   if (orderIds.length && r >= 0.8) {
@@ -178,6 +192,11 @@ function report({ sent, stats, percentiles: p, drain, failures }, orderIds) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const a = parseArgs(process.argv.slice(2));
+  const missing = validateOptions(a);
+  if (missing) {
+    console.error(missing);
+    process.exit(2);
+  }
   const secret = a.secret || process.env.TIENDANUBE_CLIENT_SECRET;
   const usage = "Uso: TIENDANUBE_CLIENT_SECRET=... webhook-burst.mjs --url <receptor> [--rps 50] [--duration 600] [--store-id 1] [--order-ids 101,102] [--status-url <url>] [--no-drain]";
   if (!a.url || !secret) {
