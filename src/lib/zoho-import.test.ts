@@ -261,6 +261,39 @@ test('grupo con vínculo real: un GET por hijo; el hijo con 429 no manda stock y
   expect(JSON.stringify(stockPatches())).not.toContain('"stock":0');
 });
 
+test('grupo con vínculo real: pide el detalle de cada hijo aunque el grupo traiga locations vacías', async () => {
+  tnProducts();
+  tnVariants = [{ id: 9, sku: 'c-1' }, { id: 10, sku: 'c-2' }];
+  zoho.groupItems = [
+    { item_id: 'c1', name: 'C1', sku: 'C-1', rate: 10, stock_on_hand: 20, locations: [{ location_id: 'ZL1', location_stock_on_hand: '' }] },
+    { item_id: 'c2', name: 'C2', sku: 'C-2', rate: 10, stock_on_hand: 20, locations: [{ location_id: 'ZL1', location_stock_on_hand: '' }] },
+  ];
+  zoho.child['/inventory/v1/items/c1'] = () => Response.json({ item: { locations: [{ location_id: 'ZL1', location_stock_on_hand: '20.00' }] } });
+  zoho.child['/inventory/v1/items/c2'] = () => Response.json({ item: { locations: [{ location_id: 'ZL1', location_stock_on_hand: 7 }] } });
+  locs.tn = [{ id: 'L1' }];
+  locs.mappings = [link];
+  await run({ items: [{ ...updateEntry, zoho_item_id: 'group:g1' }] });
+  expect(zoho.childCalls).toEqual(['/inventory/v1/items/c1', '/inventory/v1/items/c2']);
+  expect(stockPatches()[0].body[0].variants).toEqual([
+    { id: 9, price: '10', inventory_levels: [{ location_id: 'L1', stock: 20 }] },
+    { id: 10, price: '10', inventory_levels: [{ location_id: 'L1', stock: 7 }] },
+  ]);
+});
+
+test('grupo con locations vacías y detalle caído: no envía stock 0', async () => {
+  tnProducts();
+  tnVariants = [{ id: 9, sku: 'c-1' }];
+  zoho.groupItems = [
+    { item_id: 'c1', name: 'C1', sku: 'C-1', rate: 10, stock_on_hand: 20, locations: [{ location_id: 'ZL1', location_stock_on_hand: '' }] },
+  ];
+  zoho.child['/inventory/v1/items/c1'] = () => Response.json({ message: 'down' }, { status: 503 });
+  locs.tn = [{ id: 'L1' }];
+  locs.mappings = [link];
+  const result = await run({ items: [{ ...updateEntry, zoho_item_id: 'group:g1' }] });
+  expect(result.message).toContain('stock por almacén no disponible');
+  expect(JSON.stringify(stockPatches())).not.toContain('"stock":0');
+});
+
 test('grupo sin vínculo real: no se consulta el detalle de los hijos', async () => {
   tnProducts();
   tnVariants = [{ id: 9, sku: 'c-1' }, { id: 10, sku: 'c-2' }];

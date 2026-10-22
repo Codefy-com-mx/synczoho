@@ -11,7 +11,7 @@ import { corsHeaders, getAdminClient, getZohoConnection, getValidAccessToken, IN
 import { encodeBase64 } from "../../base64.js";
 import { tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { ZOHO_TOTAL, loadOrSeedLocationMappings, type LocationMapping } from "../_shared/locations.js";
-import { deriveTnLocationCount, resolveInitialLevels, zohoTotal } from "../_shared/stock-plan.js";
+import { deriveTnLocationCount, resolveInitialLevels, zohoLocationStock, zohoTotal } from "../_shared/stock-plan.js";
 import { loadCatalog } from "../_shared/tn-catalog.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 
@@ -357,15 +357,15 @@ async function loadZohoProduct(
       if (n) attrNames.push(String(n));
     }
 
-    // El detalle del grupo suele no traer stock por almacén: solo si hay vínculos reales se pide por hijo.
+    // El detalle del grupo no trae stock por almacén fiable (puede venir vacío): con vínculos reales se pide
+    // siempre el detalle de cada hijo.
     if (needLocations) {
       for (const it of itemsRaw) {
-        if (Array.isArray(it.locations) && it.locations.length > 0) continue;
         // Un fallo (429/5xx/red) deja al hijo sin lista: el stock no se envía, pero el grupo sigue.
         try {
           const ri = await zohoFetch(admin, conn, `/inventory/v1/items/${it.item_id}`);
           const ji = ri.ok ? await ri.json().catch(() => null) : null;
-          if (Array.isArray(ji?.item?.locations)) it.locations = ji.item.locations;
+          it.locations = Array.isArray(ji?.item?.locations) ? ji.item.locations : undefined;
         } catch (e) {
           console.error("zoho item locations error", it.item_id, e);
         }
@@ -447,8 +447,7 @@ async function loadZohoProduct(
 }
 
 function zohoLocations(it: any): ZohoVariantData["locations"] {
-  if (!Array.isArray(it.locations)) return undefined;
-  return it.locations.map((l: any) => ({ location_id: String(l.location_id), stock: Number(l.location_stock_on_hand) || 0 }));
+  return zohoLocationStock(it.locations);
 }
 
 function levelsFor(v: ZohoVariantData, ctx: StockCtx) {

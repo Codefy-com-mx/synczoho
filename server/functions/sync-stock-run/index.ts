@@ -22,7 +22,7 @@ import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 import { enqueueBackfill, getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
 import { ZOHO_TOTAL, loadOrSeedLocationMappings } from "../_shared/locations.js";
-import { buildStockPatch, deriveTnLocationCount, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
+import { buildStockPatch, deriveTnLocationCount, matchBySku, planStockChanges, zohoLocationStock, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
 import { logRetryObserver } from "../_shared/tn-observer.js";
 
 const ZOHO_DETAIL_CONCURRENCY = 3;
@@ -109,12 +109,12 @@ export default serve(async (req) => {
     const details: any[] = [];
     const { pairs } = matchBySku(zohoItems, catalog);
     if (mappings.some((m) => m.zoho_location_id && m.zoho_location_id !== ZOHO_TOTAL)) {
-      const queue = pairs.map((p) => p.item).filter((it) => !Array.isArray(it.locations));
+      const queue = pairs.map((p) => p.item).filter((it) => !zohoLocationStock(it.locations));
       await Promise.all(Array.from({ length: ZOHO_DETAIL_CONCURRENCY }, async () => {
         for (let it = queue.shift(); it; it = queue.shift()) {
           const r = await zohoFetch(admin!, conn, `/inventory/v1/items/${it.item_id}`);
           const j = await r.json().catch(() => ({}));
-          if (r.ok && Array.isArray(j.item?.locations)) {
+          if (r.ok && zohoLocationStock(j.item?.locations)) {
             it.locations = j.item.locations;
           } else {
             // Sin locations el planificador no toca el ítem; se informa como error.

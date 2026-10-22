@@ -37,6 +37,19 @@ export function zohoTotal(item: { stock_on_hand?: unknown; actual_available_stoc
 }
 
 /** Cruza ítems de Zoho con variantes del catálogo por SKU (la primera variante por SKU gana). */
+/** Stock por location de Zoho; `undefined` si falta la lista o algún valor viene vacío: nunca se asume 0. */
+export function zohoLocationStock(locations: unknown): Array<{ location_id: string; stock: number }> | undefined {
+  if (!Array.isArray(locations) || locations.length === 0) return undefined;
+  const out: Array<{ location_id: string; stock: number }> = [];
+  for (const l of locations) {
+    const raw = l?.location_stock_on_hand;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+    if (!Number.isFinite(n)) return undefined;
+    out.push({ location_id: String(l.location_id), stock: n });
+  }
+  return out;
+}
+
 export function matchBySku(zohoItems: ZohoStockItem[], catalog: CatalogVariant[]) {
   const bySku = new Map<string, CatalogVariant>();
   for (const v of catalog) {
@@ -131,10 +144,12 @@ export function planStockChanges(input: {
         continue;
       }
       // Sin datos por location en Zoho no se sabe cuánto hay en cada almacén: no se toca.
-      if (!Array.isArray(item.locations)) continue;
-      const zl = item.locations.find((l) => String(l.location_id) === m.zoho_location_id);
+      const zls = zohoLocationStock(item.locations);
+      if (!zls) continue;
+      // Una location ausente de la lista del ítem no tiene stock en Zoho.
+      const zl = zls.find((l) => l.location_id === m.zoho_location_id);
       const tl = variant.inventory_levels.find((l) => l.location_id === m.tn_location_id);
-      add(item, variant, m.tn_location_id, m.zoho_location_id, Number(zl?.location_stock_on_hand ?? 0) || 0, tl?.stock ?? 0);
+      add(item, variant, m.tn_location_id, m.zoho_location_id, zl?.stock ?? 0, tl?.stock ?? 0);
     }
   }
   return { changes, unmatched, inSync, blocked: null };

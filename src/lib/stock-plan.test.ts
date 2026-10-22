@@ -98,6 +98,17 @@ describe("planStockChanges", () => {
     expect(plan.changes.map((c) => [c.tn_location_id, c.from, c.to])).toEqual([["L1", 0, 4], ["L2", 3, 0]]);
   });
 
+  it("Zoho location stock empty (\"\") is unknown, never 0: the pair is not touched", () => {
+    const plan = planStockChanges({
+      ...base,
+      zohoItems: [{ item_id: "z1", sku: "SKU-1", locations: [{ location_id: "ZA", location_stock_on_hand: "" }] }],
+      catalog: [variant("SKU-1", [["L1", 3]])],
+      mappings: [mapping("L1", "ZA")],
+      tnLocationCount: 1,
+    });
+    expect(plan.changes).toEqual([]);
+  });
+
   it("(e) bidirectional: priority decides the target per pair, never negative", () => {
     const input = {
       zohoItems: [{ item_id: "z1", sku: "SKU-1", locations: [{ location_id: "ZA", location_stock_on_hand: -2 }] }],
