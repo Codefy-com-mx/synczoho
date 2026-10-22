@@ -10,7 +10,7 @@ import { serve } from "../../runtime.js";
 import { corsHeaders, getAdminClient, getZohoConnection, getValidAccessToken, INVENTORY_DOMAINS, logSync, zohoFetch } from "../_shared/zoho.js";
 import { encodeBase64 } from "../../base64.js";
 import { tnFetchWithRetry } from "../_shared/tiendanube.js";
-import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings, type LocationMapping } from "../_shared/locations.js";
+import { ZOHO_TOTAL, loadOrSeedLocationMappings, type LocationMapping } from "../_shared/locations.js";
 import { deriveTnLocationCount, resolveInitialLevels, zohoTotal } from "../_shared/stock-plan.js";
 import { loadCatalog } from "../_shared/tn-catalog.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
@@ -111,12 +111,13 @@ export default serve(async (req) => {
 
     // Mapeos de locations y cantidad de locations de TN: una vez por request (no por ítem).
     const needsStock = F.stock && items.some((i) => i.action !== "link");
-    const mappings = needsStock ? await loadLocationMappings(storeId) : [];
-    const tnLocations = needsStock ? await fetchTnLocations(store) : null;
+    const mappings = needsStock ? await loadOrSeedLocationMappings(admin, store, conn) : [];
+    // Locations de Tiendanube desde location_mappings (backfill y webhooks location/*), sin GET /locations.
+    const tnLocations = mappings.length ? mappings : null;
     const stockCtx: StockCtx = {
       mappings,
       tnLocations,
-      // Si /locations falló, la caché revela si hay varias locations: nunca se manda stock sin location_id a ciegas.
+      // Sin filas guardadas, la caché revela si hay varias locations: nunca se manda stock sin location_id a ciegas.
       tnLocationCount: needsStock
         ? deriveTnLocationCount(tnLocations, mappings, tnLocations ? [] : await loadCatalog(storeId))
         : null,
@@ -543,7 +544,7 @@ async function syncVariantsUpdate(
     if (bySku.has(key)) dupSkus.add(key);
     bySku.set(key, tv); // la última gana (comportamiento existente)
   }
-  // Las variantes del producto revelan si hay varias locations aunque falle GET /locations.
+  // Las variantes del producto revelan si hay varias locations aunque no haya filas en location_mappings.
   const ctx: StockCtx = {
     ...stockCtx,
     tnLocationCount: deriveTnLocationCount(stockCtx.tnLocations, stockCtx.mappings, tnVariants.map((tv) => ({

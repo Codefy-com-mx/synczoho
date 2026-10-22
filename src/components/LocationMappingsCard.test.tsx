@@ -13,7 +13,7 @@ const zoho_locations = [{ id: 'z1', name: 'Bodega' }, { id: 'z2', name: 'Otra' }
 describe('LocationMappingsCard', () => {
   beforeEach(() => invoke.mockReset());
 
-  it('refresca al montar y guarda el vínculo al cambiar el select', async () => {
+  it('carga al montar y guarda el vínculo al cambiar el select', async () => {
     invoke.mockResolvedValueOnce({
       data: { mappings: [row(null), { ...row(null), tn_location_id: 'B', tn_location_name: 'Filial' }], tn_available: true, zoho_available: true, zoho_locations },
       error: null,
@@ -23,7 +23,7 @@ describe('LocationMappingsCard', () => {
     });
     const { container } = render(<LocationMappingsCard storeId="s1" />);
     expect(await screen.findByText('Central')).toBeInTheDocument();
-    expect(invoke.mock.calls[0][1]).toMatchObject({ body: { storeId: 's1', action: 'refresh' } });
+    expect(invoke.mock.calls[0][1]).toMatchObject({ body: { storeId: 's1', action: 'get' } });
 
     fireEvent.change(container.querySelector('select[name="loc-A"]')!, { target: { value: 'z2' } });
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));

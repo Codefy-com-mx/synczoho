@@ -10,7 +10,6 @@ const h = vi.hoisted(() => ({
   catalog: [] as any[],
   catalogStatus: "ready" as string,
   mappings: [] as any[],
-  tnLocations: null as any,
   zohoDetails: {} as Record<string, any>,
   adjustments: [] as any[],
   zohoItemsStatus: 200,
@@ -113,11 +112,7 @@ vi.mock("../../server/functions/_shared/tn-catalog.js", () => ({
 
 vi.mock("../../server/functions/_shared/locations.js", () => ({
   ZOHO_TOTAL: "__total__",
-  loadLocationMappings: async () => h.mappings,
-  fetchTnLocations: async () => {
-    h.events.push("tn:locations");
-    return h.tnLocations;
-  },
+  loadOrSeedLocationMappings: async () => h.mappings,
 }));
 
 import syncStockRun from "../../server/functions/sync-stock-run/index";
@@ -191,7 +186,6 @@ beforeEach(() => {
   h.catalog = [{ product_id: 10, variant_id: 100, sku: "SKU-1", price: 0, promotional_price: null, inventory_levels: [{ location_id: "L1", stock: 3 }] }];
   h.catalogStatus = "ready";
   h.mappings = [{ tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: "ZA", zoho_location_name: "Central" }];
-  h.tnLocations = [{ id: "L1", name: "Central" }];
   h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5, locations: [{ location_id: "ZA", location_stock_on_hand: 5 }] }];
   h.zohoDetails = {};
   h.adjustments = [];
@@ -214,7 +208,6 @@ describe("sync-stock-run single flight", () => {
       "lock:try",
       "zoho:items",
       "catalog:load",
-      "tn:locations",
       "tn:stock-price",
       "lock:release",
     ]);
@@ -281,7 +274,7 @@ describe("sync-stock-run single flight", () => {
     expect(payload.dry_run).toBe(true);
     expect(h.lockPoolRequests).toBe(0);
     expect(pool.connectCount).toBe(0);
-    expect(h.events).toEqual(["zoho:items", "catalog:load", "tn:locations"]);
+    expect(h.events).toEqual(["zoho:items", "catalog:load"]);
     expect(h.upsertCalls).toHaveLength(0);
     expect(h.logCalls).toHaveLength(0);
   });
@@ -324,7 +317,6 @@ describe("sync-stock-run Tiendanube writes", () => {
 describe("sync-stock-run per location", () => {
   it("sends explicit location_id for each mapped location in one PATCH", async () => {
     h.mappings.push({ tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "ZB", zoho_location_name: "Norte" });
-    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
     h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", locations: [
       { location_id: "ZA", location_stock_on_hand: 5 }, { location_id: "ZB", location_stock_on_hand: 2 },
     ] }];
@@ -355,7 +347,6 @@ describe("sync-stock-run per location", () => {
       { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
       { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: null, zoho_location_name: null },
     ];
-    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
     h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5 }];
 
     const { response, payload } = await runHandler();
@@ -373,7 +364,6 @@ describe("sync-stock-run per location", () => {
 
   it("reports the unlinked Tiendanube locations when at least one is linked", async () => {
     h.mappings.push({ tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: null, zoho_location_name: null });
-    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
 
     const { payload } = await runHandler();
 
@@ -386,7 +376,6 @@ describe("sync-stock-run per location", () => {
       { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
       { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "__total__", zoho_location_name: "Stock total de Zoho" },
     ];
-    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
     h.catalog[0].inventory_levels = [{ location_id: "L1", stock: 3 }, { location_id: "L2", stock: 0 }];
     h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 7 }];
 
@@ -403,7 +392,6 @@ describe("sync-stock-run per location", () => {
       { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: "ZA", zoho_location_name: "Central" },
       { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "__total__", zoho_location_name: "Stock total de Zoho" },
     ];
-    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
 
     const { payload } = await runHandler();
 
@@ -422,7 +410,6 @@ describe("sync-stock-run per location", () => {
       { tn_location_id: "L1", tn_location_name: "Central", zoho_location_id: null, zoho_location_name: null },
       { tn_location_id: "L2", tn_location_name: "Norte", zoho_location_id: "__total__", zoho_location_name: "Stock total de Zoho" },
     ];
-    h.tnLocations = [{ id: "L1", name: "Central" }, { id: "L2", name: "Norte" }];
     h.catalog[0].inventory_levels = [{ location_id: "L1", stock: 3 }, { location_id: "L2", stock: 2 }];
     h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 7 }];
 
@@ -433,7 +420,6 @@ describe("sync-stock-run per location", () => {
 
   it("uses the legacy path without location_id when the locations scope is missing", async () => {
     h.mappings = [];
-    h.tnLocations = null;
     h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 5 }];
 
     await runHandler();
@@ -487,9 +473,8 @@ describe("sync-stock-run per location", () => {
     expect(h.fetchCalls).toHaveLength(0);
   });
 
-  describe("when the live /locations fetch fails", () => {
+  describe("without Tiendanube locations known from location_mappings", () => {
     beforeEach(() => {
-      h.tnLocations = null;
       h.zohoItems = [{ item_id: "z-1", sku: "SKU-1", stock_on_hand: 8 }];
     });
 

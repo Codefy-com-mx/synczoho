@@ -21,6 +21,8 @@ import {
   autoMatchLocations,
   fetchTnLocations,
   fetchZohoLocations,
+  loadOrSeedLocationMappings,
+  locationName,
   refreshLocationMappings,
   type LocationMapping,
 } from "../../server/functions/_shared/locations.js";
@@ -210,5 +212,58 @@ describe("refreshLocationMappings", () => {
     const out = await refreshLocationMappings({} as any, store, null);
     expect(out.zoho_available).toBe(false);
     expect(out.mappings[0]).toMatchObject({ zoho_location_id: "z1", zoho_location_name: "old-z1" });
+  });
+});
+
+describe("sin GET /locations repetido", () => {
+  const conn: any = { store_id: "s1" };
+
+  it("refresh con storedTn usa las filas guardadas y autovincula contra Zoho sin llamar a Tiendanube", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    h.rows = [existing("A", null)];
+    h.zohoFetch.mockResolvedValue(new Response(JSON.stringify({ locations: [{ location_id: "z1", location_name: "A" }] })));
+    const out = await refreshLocationMappings({} as any, store, conn, true);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(out.mappings).toEqual([{ tn_location_id: "A", tn_location_name: "A", zoho_location_id: "z1", zoho_location_name: "A" }]);
+  });
+
+  it("refresh con storedTn y sin filas pide GET /locations una vez", async () => {
+    stubFetch(200, [{ id: "A", name: "Tienda" }]);
+    const out = await refreshLocationMappings({} as any, store, null, true);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(out.mappings.map((m) => m.tn_location_id)).toEqual(["A"]);
+  });
+
+  it("loadOrSeedLocationMappings con filas guardadas no llama a Tiendanube ni a Zoho", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    h.rows = [existing("A", "z1")];
+    expect(await loadOrSeedLocationMappings({} as any, store, conn)).toEqual(h.rows);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(h.zohoFetch).not.toHaveBeenCalled();
+  });
+
+  it("loadOrSeedLocationMappings sin filas las siembra con GET /locations", async () => {
+    stubFetch(200, [{ id: "A", name: "Tienda" }]);
+    const out = await loadOrSeedLocationMappings({} as any, store, null);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(out.map((m) => m.tn_location_id)).toEqual(["A"]);
+    expect(h.queries.some((q) => /INSERT INTO location_mappings/.test(q.text))).toBe(true);
+  });
+});
+
+describe("locationName", () => {
+  it("lee las claves de locale completas que devuelve Tiendanube", () => {
+    expect(locationName({ es_MX: "CDMX 1", en_US: "Mexico City 1" })).toBe("CDMX 1");
+    expect(locationName({ pt_BR: "Depósito", en_US: "Warehouse" })).toBe("Depósito");
+    expect(locationName({ en_US: "Warehouse" })).toBe("Warehouse");
+  });
+
+  it("acepta claves cortas, texto plano y cae en 'Location' sin nombre", () => {
+    expect(locationName({ es: "Central" })).toBe("Central");
+    expect(locationName("Central")).toBe("Central");
+    expect(locationName({ es_AR: "" })).toBe("Location");
+    expect(locationName(null)).toBe("Location");
   });
 });

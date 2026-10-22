@@ -22,6 +22,19 @@ export const ZOHO_TOTAL_NAME = "Stock total de Zoho";
 
 const norm = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim();
 
+/** El nombre viene por locale completo (`es_MX`, `es_AR`, `pt_BR`, `en_US`…): primero español, luego pt, luego en. */
+export function locationName(name: unknown): string {
+  if (typeof name === "string") return name.trim() || "Location";
+  if (!name || typeof name !== "object") return "Location";
+  const entries = Object.entries(name as Record<string, unknown>)
+    .filter((e): e is [string, string] => typeof e[1] === "string" && e[1].trim() !== "");
+  for (const lang of ["es", "pt", "en"]) {
+    const hit = entries.find(([k]) => k === lang || k.startsWith(`${lang}_`));
+    if (hit) return hit[1].trim();
+  }
+  return entries[0]?.[1].trim() ?? "Location";
+}
+
 /** `null` si no hay scope read_locations o la API falla: el llamador no debe tocar nada. */
 export async function fetchTnLocations(store: TiendanubeStore): Promise<TnLocation[] | null> {
   try {
@@ -29,10 +42,7 @@ export async function fetchTnLocations(store: TiendanubeStore): Promise<TnLocati
     if (!resp.ok) return null;
     const list = await resp.json();
     if (!Array.isArray(list)) return null;
-    return list.map((l: any) => ({
-      id: String(l.id),
-      name: (l.name?.es ?? l.name?.pt ?? l.name?.en ?? (typeof l.name === "string" ? l.name : "")) || "Location",
-    }));
+    return list.map((l: any) => ({ id: String(l.id), name: locationName(l.name) }));
   } catch {
     return null;
   }
@@ -115,11 +125,17 @@ async function persist(storeId: string, rows: LocationMapping[]): Promise<void> 
   );
 }
 
+/**
+ * Con `storedTn` las locations de Tiendanube salen de `location_mappings` (que mantienen el backfill y los
+ * webhooks location/*) y solo se llama a GET /locations si la tienda aún no tiene filas.
+ */
 export async function refreshLocationMappings(
-  admin: DatabaseClient, store: TiendanubeStore, conn: ZohoConnection | null,
+  admin: DatabaseClient, store: TiendanubeStore, conn: ZohoConnection | null, storedTn = false,
 ): Promise<LocationsResult> {
-  const tn = await fetchTnLocations(store);
   const existing = await loadLocationMappings(store.store_id);
+  const tn = storedTn && existing.length > 0
+    ? existing.map((m) => ({ id: m.tn_location_id, name: m.tn_location_name }))
+    : await fetchTnLocations(store);
   // Sin conexión o con Zoho caído (null) no se sabe qué locations existen: los vínculos guardados no se tocan.
   const zoho = conn ? await fetchZohoLocations(admin, conn) : null;
   const zoho_available = !!zoho && zoho.length > 0;
@@ -136,4 +152,16 @@ export async function refreshLocationMappings(
       });
   await persist(store.store_id, mappings);
   return { mappings, tn_available: true, zoho_available, zoho_locations: zoho ?? [] };
+}
+
+/**
+ * Mapeos guardados; si la tienda aún no tiene filas (backfill previo a MultiCD o GET /locations fallido) se piden
+ * una vez y se guardan. Así las sincronizaciones no llaman a GET /locations en cada ejecución.
+ */
+export async function loadOrSeedLocationMappings(
+  admin: DatabaseClient, store: TiendanubeStore, conn: ZohoConnection | null,
+): Promise<LocationMapping[]> {
+  const stored = await loadLocationMappings(store.store_id);
+  if (stored.length > 0) return stored;
+  return (await refreshLocationMappings(admin, store, conn)).mappings;
 }

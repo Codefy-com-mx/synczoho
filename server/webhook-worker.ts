@@ -85,6 +85,10 @@ export async function processEvent(row: EventRow): Promise<void> {
       await refreshLocationMappings(admin, store, conn);
     } else if (event === "internal/backfill") {
       await backfillCatalog(store, logRetryObserver(getAdminClient(), storeId));
+      // Siembra location_mappings al instalar/resincronizar; un fallo aquí no debe repetir el paginado de productos.
+      const conn = await getZohoConnection(admin, storeId).catch(() => null);
+      await refreshLocationMappings(admin, store, conn)
+        .catch((e) => console.error("[worker] refreshLocationMappings tras backfill falló", storeId, e));
     } else if (event === "product/deleted") {
       await deleteProduct(storeId, Number(payload.id));
     } else if (event === "category/deleted") {

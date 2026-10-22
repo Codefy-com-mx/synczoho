@@ -31,7 +31,7 @@ export function LocationMappingsCard({ storeId }: Props) {
   };
 
   useEffect(() => {
-    call({ action: 'refresh' })
+    call({ action: 'get' })
       .catch((e) => console.error('Error al cargar las ubicaciones', e))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps

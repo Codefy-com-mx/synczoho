@@ -60,8 +60,8 @@ export default serve(async (req) => {
       return json({ mappings: await loadLocationMappings(id), tn_available: true, zoho_available: !!zoho && zoho.length > 0, zoho_locations: zoho ?? [] });
     }
 
-    // ponytail: "get" también consulta ambas APIs; si pesa, devolver solo las filas guardadas.
-    return json(await refreshLocationMappings(admin, await getStore(admin, id), conn));
+    // "get" usa las locations de Tiendanube guardadas (sin GET /locations por visita); "refresh" las vuelve a pedir.
+    return json(await refreshLocationMappings(admin, await getStore(admin, id), conn, action === "get"));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Error";
     console.error("location-mappings error", msg);

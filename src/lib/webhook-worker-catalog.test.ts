@@ -53,6 +53,7 @@ beforeEach(() => {
   m.applyPricesToZoho.mockResolvedValue({ updated: 1, errors: 0 });
   m.getZohoConnection.mockResolvedValue(conn);
   m.backfillCatalog.mockResolvedValue({ products: 0, variants: 0 });
+  m.refreshLocationMappings.mockResolvedValue({ mappings: [] });
   m.sendAlert.mockResolvedValue(new Response("{}"));
   m.getStore.mockResolvedValue(store);
   m.findStore.mockResolvedValue(store);
@@ -81,9 +82,17 @@ describe("processEvent catálogo", () => {
     expect(m.refreshCategory).toHaveBeenCalledOnce();
   });
 
-  it("internal/backfill llama backfillCatalog con observer", async () => {
+  it("internal/backfill llama backfillCatalog con observer y siembra location_mappings", async () => {
     await processEvent(row("internal/backfill"));
     expect(m.backfillCatalog).toHaveBeenCalledWith(store, m.observer);
+    expect(m.refreshLocationMappings).toHaveBeenCalledWith({}, store, conn);
+  });
+
+  it("internal/backfill no falla (ni repite el paginado) si refrescar las locations falla", async () => {
+    m.refreshLocationMappings.mockRejectedValue(new Error("zoho down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(processEvent(row("internal/backfill"))).resolves.toBeUndefined();
+    err.mockRestore();
   });
 
   it("evento desconocido no lanza", async () => {

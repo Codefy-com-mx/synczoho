@@ -21,7 +21,7 @@ import {
 import { getStore, tnFetchWithRetry } from "../_shared/tiendanube.js";
 import { chunkStockPriceBatch } from "../_shared/stock-price-batch.js";
 import { enqueueBackfill, getCatalogStatus, loadCatalog } from "../_shared/tn-catalog.js";
-import { ZOHO_TOTAL, fetchTnLocations, loadLocationMappings } from "../_shared/locations.js";
+import { ZOHO_TOTAL, loadOrSeedLocationMappings } from "../_shared/locations.js";
 import { buildStockPatch, deriveTnLocationCount, matchBySku, planStockChanges, type StockChange, type ZohoStockItem } from "../_shared/stock-plan.js";
 import { logRetryObserver } from "../_shared/tn-observer.js";
 
@@ -95,13 +95,13 @@ export default serve(async (req) => {
 
     // 2) Variantes de Tiendanube desde la caché local, mapeos y cantidad de locations
     const catalog = await loadCatalog(storeId);
-    const mappings = await loadLocationMappings(storeId);
-    const tnLocations = await fetchTnLocations(store);
-    const tnLocationCount = deriveTnLocationCount(tnLocations, mappings, catalog);
+    // Las locations de Tiendanube salen de location_mappings (backfill y webhooks location/*): sin GET /locations por ejecución.
+    const mappings = await loadOrSeedLocationMappings(admin!, store, conn);
+    const tnLocationCount = deriveTnLocationCount(mappings.length ? mappings : null, mappings, catalog);
     // Locations de Tiendanube conocidas y sin vincular (solo se informan si hay al menos un vínculo).
     const linkedIds = new Set(mappings.filter((m) => m.zoho_location_id).map((m) => m.tn_location_id));
     const unmapped_locations = linkedIds.size === 0 ? [] : [
-      ...new Set((tnLocations ? tnLocations.map((l) => l.id) : mappings.map((m) => m.tn_location_id)).filter((l) => !linkedIds.has(l))),
+      ...new Set(mappings.map((m) => m.tn_location_id).filter((l) => !linkedIds.has(l))),
     ];
 
     // 3) Si la lista de Zoho no trae stock por location, pedir el detalle solo de los ítems con match

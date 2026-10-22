@@ -14,8 +14,11 @@ vi.mock('../../server/functions/_shared/tn-catalog.js', () => ({
 }));
 vi.mock('../../server/functions/_shared/locations.js', () => ({
   ZOHO_TOTAL: '__total__',
-  loadLocationMappings: async () => locs.mappings,
-  fetchTnLocations: async () => locs.tn,
+  // Como location_mappings: una fila por location de Tiendanube (locs.tn), vinculada o no.
+  loadOrSeedLocationMappings: async () => locs.tn
+    ? locs.tn.map((t) => locs.mappings.find((m) => m.tn_location_id === t.id)
+      ?? { tn_location_id: t.id, tn_location_name: t.id, zoho_location_id: null, zoho_location_name: null })
+    : locs.mappings,
 }));
 vi.mock('../../server/functions/_shared/zoho.js', () => {
   const query: Record<string, any> = {};
@@ -355,7 +358,7 @@ test('alta con /locations caído y sin mapeos: la caché revela 2 locations y no
   expect(cache.loads).toBe(1);
 });
 
-test('con /locations disponible no se lee la caché', async () => {
+test('con locations guardadas no se lee la caché', async () => {
   tnProducts();
   locs.tn = [{ id: 'L1' }];
   await run({ items: [{ zoho_item_id: 'zoho-1', action: 'create' }] });
