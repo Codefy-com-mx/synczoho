@@ -72,6 +72,13 @@ describe('LocationMappingsCard', () => {
       expect(container.querySelectorAll(`option[value="__total__"]`)).toHaveLength(2);
       unmount();
 
+      // Una org sin multi-location igual devuelve su ubicación por defecto
+      invoke.mockResolvedValueOnce(two(null, null, zoho_locations.slice(0, 1)));
+      const one = render(<LocationMappingsCard storeId="s1" />);
+      await screen.findByText('Central');
+      expect(one.container.querySelectorAll(`option[value="__total__"]`)).toHaveLength(2);
+      one.unmount();
+
       invoke.mockResolvedValueOnce(two(null, null, zoho_locations));
       render(<LocationMappingsCard storeId="s1" />);
       await screen.findByText('Central');

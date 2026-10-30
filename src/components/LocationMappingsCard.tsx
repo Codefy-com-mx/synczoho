@@ -49,8 +49,9 @@ export function LocationMappingsCard({ storeId }: Props) {
     }
   };
 
-  // Org de Zoho sin locations y tienda con 2+ en Tiendanube: el comerciante elige cuál recibe el total.
-  const offerTotal = data.zoho_locations.length === 0 && data.mappings.length >= 2;
+  // Org de Zoho sin varias locations (una org sin multi-location igual devuelve la de por defecto) y tienda
+  // con 2+ en Tiendanube: el comerciante elige cuál recibe el total.
+  const offerTotal = data.zoho_locations.length <= 1 && data.mappings.length >= 2;
   const totalHolder = data.mappings.find((m) => m.zoho_location_id === ZOHO_TOTAL)?.tn_location_id;
 
   return (

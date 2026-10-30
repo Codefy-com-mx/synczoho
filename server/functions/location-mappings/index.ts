@@ -30,8 +30,9 @@ export default serve(async (req) => {
       for (const m of mappings) {
         if (!final.has(String(m?.tn_location_id))) return json({ error: "Location de Tiendanube desconocida" }, 400);
         if (m.zoho_location_id === ZOHO_TOTAL) {
-          // Con Zoho caído (null) o sin locations ([]) se acepta; con locations hay que vincular las reales.
-          if (zoho?.length) return json({ error: "Zoho tiene ubicaciones: vincula cada una en lugar del stock total" }, 400);
+          // Con Zoho caído (null), sin locations ([]) o con solo la ubicación por defecto (una org sin
+          // multi-location igual devuelve una) se acepta; con varias hay que vincular las reales.
+          if (zoho && zoho.length > 1) return json({ error: "Zoho tiene ubicaciones: vincula cada una en lugar del stock total" }, 400);
         } else if (m.zoho_location_id !== null) {
           if (!zoho) return json({ error: "Zoho no está disponible, inténtalo de nuevo" }, 503);
           if (!zoho.some((z) => z.id === m.zoho_location_id)) return json({ error: "Location de Zoho inexistente" }, 400);

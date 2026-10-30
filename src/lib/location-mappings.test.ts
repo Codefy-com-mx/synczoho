@@ -90,7 +90,7 @@ describe("location-mappings save", () => {
 describe("location-mappings save con stock total", () => {
   beforeEach(() => { h.stored = [row("A", null), row("B", null)]; });
 
-  it.each([[[]], [null]])("acepta ZOHO_TOTAL cuando la lista de Zoho es %j", async (list) => {
+  it.each([[[]], [null], [[{ id: "z1", name: "Oficina principal" }]]])("acepta ZOHO_TOTAL cuando la lista de Zoho es %j", async (list) => {
     h.fetchZohoLocations.mockResolvedValue(list);
     const res = await save([{ tn_location_id: "B", zoho_location_id: "__total__" }]);
     expect(res.status).toBe(200);
