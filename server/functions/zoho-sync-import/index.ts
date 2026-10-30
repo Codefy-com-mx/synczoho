@@ -644,7 +644,8 @@ async function fetchProductImages(
     candidates.push({ id: p.representative_item_id, name: p.image_name });
   }
   // Imagen del primer ítem hijo
-  if (p.variants[0]) {
+  // Un grupo de una sola variante tiene representative_item_id === variants[0].item_id: no repetir la imagen
+  if (p.variants[0] && !candidates.some((c) => c.id === p.variants[0].item_id)) {
     candidates.push({ id: p.variants[0].item_id, name: p.image_name || `zoho-${p.variants[0].item_id}.jpg` });
   }
   try {

@@ -162,10 +162,10 @@ test('tras crear sube una imagen por POST /products/{id}/images con {attachment,
   const all = calls();
   expect(all.find((c) => c.path === '/products')!.body).not.toHaveProperty('images');
   const images = all.filter((c) => c.path === '/products/456/images');
-  expect(images).toHaveLength(2);
+  // El representante del grupo es el primer hijo: su imagen se sube una sola vez
+  expect(images).toHaveLength(1);
   expect(images[0].method).toBe('POST');
   expect(images[0].body).toEqual({ attachment: expect.any(String), filename: 'g.jpg', position: 1 });
-  expect(images[1].body.position).toBe(2);
   expect(all.findIndex((c) => c.path === '/products')).toBeLessThan(all.findIndex((c) => c.path === '/products/456/images'));
 });
 
